@@ -9,6 +9,12 @@
   sets up the <a href="https://mr_goldberg.gitlab.io/goldberg_emulator/">Goldberg Steamworks emulator</a> for it — no manual config editing required.
 </p>
 
+<p align="center">
+  <img src="assets/screenshot-main.png" width="360" alt="GoldbergDrop main window">
+  &nbsp;
+  <img src="assets/screenshot-select.png" width="360" alt="GoldbergDrop match picker">
+</p>
+
 ---
 
 ## What it does
