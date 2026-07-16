@@ -5,85 +5,126 @@
 <h1 align="center">GoldbergDrop</h1>
 
 <p align="center">
-  Drag a game's <code>.exe</code> onto the window, and GoldbergDrop finds its Steam App ID and<br>
-  sets up the <a href="https://mr_goldberg.gitlab.io/goldberg_emulator/">Goldberg Steamworks emulator</a> for it — no manual config editing required.
+  Drop a game <code>.exe</code> → find the Steam App ID → set up<br>
+  the <a href="https://mr_goldberg.gitlab.io/goldberg_emulator/">Goldberg Steamworks emulator</a>. No manual config editing.
 </p>
 
 <p align="center">
-  <img src="assets/screenshot-main.png" width="360" alt="GoldbergDrop main window">
+  <img src="assets/screenshot-main.png" width="280" alt="GoldbergDrop setup — drop or browse an exe">
   &nbsp;
-  <img src="assets/screenshot-select.png" width="360" alt="GoldbergDrop match picker">
+  <img src="assets/screenshot-select.png" width="280" alt="GoldbergDrop match picker">
+</p>
+<p align="center">
+  <img src="assets/screenshot-workshop.png" width="280" alt="WorkshopDL tab">
+  &nbsp;
+  <img src="assets/screenshot-settings.png" width="280" alt="Settings — Download providers">
 </p>
 
 ---
 
 ## What it does
 
-1. You drop a game's `.exe` (or pick it via "Browse...", or right-click it and choose **Send to → GoldbergDrop**).
-2. GoldbergDrop looks up the game's Steam App ID automatically — first by the exe's file name, then by its folder name, then by the full path — using Steam's public store search. If several games match, you get to pick the right one from a list (or type the ID yourself).
-3. It downloads and caches the latest [Goldberg emulator](https://mr_goldberg.gitlab.io/goldberg_emulator/) build, then in the game's folder:
-   - writes `steam_appid.txt`
-   - creates a `steam_settings/` folder (with a DLC list, if you enabled "Fetch DLCs")
-   - backs up and replaces `steam_api.dll` / `steam_api64.dll` with the Goldberg build (searching subfolders too, if the DLL isn't next to the exe)
+1. **Drop** a game `.exe` (or Browse… / Explorer **Send to → GoldbergDrop**).
+2. **Look up** the Steam App ID (exe name → folder → path). Pick from a list if needed, or type the ID.
+3. **Apply Goldberg** in the game folder:
+   - `steam_appid.txt`
+   - `steam_settings/` (optional DLC list)
+   - replace `steam_api.dll` / `steam_api64.dll` (searches subfolders too)
 
-That's it — one drop, done.
+Games you set up also appear in the **tray launcher** for one-click start.
 
-## Why you'd want this
+## Why
 
-Goldberg is an open-source, offline reimplementation of the Steamworks API. Typical reasons to point it at a game you own:
+Goldberg is an offline Steamworks reimplementation. Useful when you want to:
 
-- Play or LAN-test a game without Steam running, e.g. on a machine that's offline.
-- Keep a game working after its Steam servers, DRM activation, or store listing has been shut down.
-- Local co-op/LAN multiplayer testing during modding or development.
+- play without Steam running
+- keep a game working after store/server shutdown
+- LAN-test while modding
 
-GoldbergDrop just automates the repetitive part of that setup (finding the App ID, editing files, swapping the DLL) — it doesn't include or download any game files, only the Goldberg emulator itself.
+GoldbergDrop only automates setup — it never ships game files.
 
 ## Features
 
-- **Drag & drop or browse** — no command line, no config files to hand-edit.
-- **Automatic Steam App ID lookup** with a fallback picker when multiple games match, and a manual entry field if nothing is found.
-- **Optional DLC list** fetched from Steam so DLC-gated content unlocks correctly.
-- **Recursive DLL search** — finds `steam_api(64).dll` even if it's tucked away in a subfolder.
-- **Right-click "Send to" integration** — enable it once from a checkbox, then send any `.exe` to GoldbergDrop straight from Explorer's context menu.
-- Small (420×420), borderless, always-on-top-free custom UI — no installer, no background service.
+| Area | What you get |
+| --- | --- |
+| **Setup** | Drag & drop, Browse, Send to, CLI path · App ID lookup · DLC fetch · recursive DLL swap |
+| **WorkshopDL** | Queue downloads via [GGNetwork](https://ggntw.com/steam) · SteamCMD fallback · bulk paste / list import |
+| **Tray** | Launch tracked games · open / quit · close-to-tray · optional Windows autostart |
+| **Settings** | Providers, SteamCMD, paths, Setup defaults, tray list |
 
 ## Download
 
-Grab `goldberg-drop.exe` from the [Releases](../../releases) page and run it — that's the whole install. It's a single, self-contained executable:
+- Get `goldberg-drop.exe` from **[Releases](../../releases)**
+- Single portable file — no installer, no API key
+- Needs internet for lookups, optional DLC/Workshop, and the one-time Goldberg download (then cached)
 
-- No installer, no .NET/VC++ redistributable, no bundled DLLs — everything it links against ships with Windows 10/11 itself.
-- No Steam Web API key or account needed; it only uses Steam's public store search.
-- Needs internet access for the App ID lookup, the optional DLC fetch, and the one-time Goldberg emulator download (cached afterwards in `%LOCALAPPDATA%`).
+> SmartScreen may warn (unsigned) → **More info → Run anyway**
 
-> Since the exe isn't code-signed, Windows SmartScreen will likely flag it as "Unknown publisher" on first run — click **More info → Run anyway**.
+---
 
 ## Usage
 
-| Screen | What to do |
-|---|---|
-| Idle | Drop a `.exe`, or click **Browse...** |
-| Multiple matches | Pick the right game from the list, or type/edit the App ID at the bottom, then **Apply** |
-| No match found | Enter the Steam App ID manually |
-| Done | You're set — "Set up another game" to do another one |
+### Goldberg setup
 
-Check **"Send to" entry** once to add GoldbergDrop to Explorer's right-click **Send to** menu for any file. If you later move `goldberg-drop.exe`, the app will tell you the entry went stale with a one-click fix.
+| Screen | Action |
+| --- | --- |
+| Idle | Drop a `.exe` or **Browse…** |
+| Multiple matches | Pick a game or edit the App ID → **Apply** |
+| No match | Enter the App ID manually |
+| Done | **Set up another game** if you want |
+
+Enable **"Send to" entry** once on the Setup tab to add GoldbergDrop to Explorer’s Send to menu.
+
+### Tray & launching games
+
+After a **successful Goldberg setup**, the game is tracked automatically (path + icon).
+
+| Action | Result |
+| --- | --- |
+| **Right-click** tray icon → game name | Starts that game’s `.exe` |
+| **Right-click** → Open GoldbergDrop | Shows the main window |
+| **Right-click** → Quit | Exits the app |
+| **Left-click** tray icon | Only restores the window (does not launch a game) |
+
+- Remove games under **Settings → Tray**
+- **Close to tray**: ✕ hides to the notification area instead of quitting
+- **Autostart**: starts hidden with `--tray` at Windows logon
+
+### WorkshopDL
+
+1. Paste Workshop URLs or IDs (or use **List** for many).
+2. **Add to Queue** / **Direct Download**.
+3. Run **Download Queue**.
+
+GGNetwork is tried first; SteamCMD is the fallback.  
+Files go to `WorkshopDownloads/{Game}/` next to the exe (change under Settings → Paths).
+
+### Settings
+
+Open **⚙** on the ribbon:
+
+**Download** · **SteamCMD** · **Paths** · **Setup** · **Tray**
+
+Config and cache live in:
+
+`%LOCALAPPDATA%\GoldbergDrop\GoldbergDrop\`
+
+---
 
 ## Building from source
 
-Requires a recent stable [Rust](https://www.rust-lang.org/) toolchain (MSVC target) on Windows.
+Requires a recent stable [Rust](https://www.rust-lang.org/) toolchain (MSVC) on Windows.
 
 ```bash
 cargo build --release
 ```
 
-The resulting binary is at `target/release/goldberg-drop.exe`, with the app icon already embedded (via `build.rs` + [`winresource`](https://crates.io/crates/winresource)) and inherited by the "Send to" shortcut.
+Output: `target/release/goldberg-drop.exe`
 
 ## Built with
 
-- [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui) for the UI
-- [Goldberg Steamworks Emulator](https://mr_goldberg.gitlab.io/goldberg_emulator/) by Mr. Goldberg
-- [`rfd`](https://crates.io/crates/rfd), [`reqwest`](https://crates.io/crates/reqwest), [`mslnk`](https://crates.io/crates/mslnk), and a handful of other great Rust crates — see `Cargo.toml`
+[egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui) · [tray-icon](https://github.com/tauri-apps/tray-icon) · [Goldberg Emulator](https://mr_goldberg.gitlab.io/goldberg_emulator/) · see `Cargo.toml`
 
 ## Disclaimer
 
-GoldbergDrop is a setup helper for the Goldberg emulator. It doesn't provide, crack, or distribute any game files — use it only with games you legitimately own. Goldberg itself is a third-party project; see its site for details and licensing.
+Setup helper for Goldberg only — use with games you own. Goldberg is a third-party project; see its site for licensing.

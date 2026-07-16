@@ -1,17 +1,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod autostart;
 mod emulator;
+mod games;
 mod goldberg;
 mod models;
 mod sendto;
+mod settings;
 mod steam;
+mod steamcmd;
+mod tray;
+mod workshop;
 
 use app::GoldbergDropApp;
 use std::path::PathBuf;
 
 /// Square side length of the custom window, in logical points.
-pub const WINDOW_SIZE: f32 = 420.0;
+pub const WINDOW_SIZE: f32 = 462.0;
 
 /// The app icon (mountain + "GBD"), baked in at compile time. Also embedded
 /// as the exe's native icon via `build.rs`/`winresource` — this copy is used
@@ -19,9 +25,15 @@ pub const WINDOW_SIZE: f32 = 420.0;
 pub const APP_ICON_PNG: &[u8] = include_bytes!("../assets/app_icon_128.png");
 
 fn main() -> eframe::Result<()> {
-    // When launched via the Windows "Send to" shortcut, Explorer passes the
-    // right-clicked file's path as the first argument.
-    let initial_path: Option<PathBuf> = std::env::args().nth(1).map(PathBuf::from);
+    let mut start_in_tray = false;
+    let mut initial_path: Option<PathBuf> = None;
+    for arg in std::env::args().skip(1) {
+        if arg == "--tray" || arg == "-tray" {
+            start_in_tray = true;
+        } else if !arg.starts_with('-') && initial_path.is_none() {
+            initial_path = Some(PathBuf::from(arg));
+        }
+    }
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size([WINDOW_SIZE, WINDOW_SIZE])
@@ -35,7 +47,8 @@ fn main() -> eframe::Result<()> {
         // rounded panel's corners. We fake a softer shadow ourselves
         // instead, so the OS one must stay off.
         .with_has_shadow(false)
-        .with_title("GoldbergDrop");
+        .with_title("GoldbergDrop")
+        .with_visible(!start_in_tray);
     if let Some(icon) = load_app_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -55,10 +68,13 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "GoldbergDrop",
         options,
-        Box::new(|cc| {
-            cc.egui_ctx.set_visuals(GoldbergDropApp::build_visuals());
+        Box::new(move |cc| {
+            GoldbergDropApp::apply_style(&cc.egui_ctx);
             install_symbol_fallback_font(&cc.egui_ctx);
-            Ok(Box::new(GoldbergDropApp::new(initial_path)))
+            Ok(Box::new(GoldbergDropApp::new(
+                initial_path,
+                start_in_tray,
+            )))
         }),
     )
 }

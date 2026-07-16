@@ -10,6 +10,7 @@ name = "goldberg-drop"
 path = "src/main.rs"
 
 [dependencies]
+arboard = "3"
 anyhow = "1.0.103"
 directories = "6.0.0"
 eframe = { version = "0.35.0", features = ["glow"] }
@@ -17,11 +18,14 @@ egui = "0.35.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 mslnk = "0.1.8"
 regex = "1.13.0"
-reqwest = { version = "0.13.4", features = ["blocking", "json", "query"] }
+reqwest = { version = "0.13.4", features = ["blocking", "json", "query", "form", "gzip", "brotli", "deflate"] }
 rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+tray-icon = "0.21"
 walkdir = "2.5.0"
+win-icon-extractor = "0.2"
+winreg = "0.55"
 zip = "8.6.0"
 
 [build-dependencies]
