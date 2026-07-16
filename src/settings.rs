@@ -24,6 +24,7 @@ pub struct AppSettings {
     /// `None` = `{exe_dir}/WorkshopDownloads`
     pub workshop_download_dir: Option<PathBuf>,
     pub fetch_dlc_default: bool,
+    pub fetch_achievements_default: bool,
     /// Close (✕) hides to tray instead of quitting.
     pub close_to_tray: bool,
     /// Start with Windows, minimized to tray (`--tray`).
@@ -38,6 +39,7 @@ impl Default for AppSettings {
             ask_before_steamcmd: true,
             workshop_download_dir: None,
             fetch_dlc_default: true,
+            fetch_achievements_default: true,
             close_to_tray: true,
             autostart_tray: false,
         }

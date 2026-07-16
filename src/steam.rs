@@ -1,6 +1,10 @@
-use crate::models::{AppDetailsEnvelope, DlcApp, SteamApp, StoreSearchResponse};
+use crate::models::{
+    Achievement, AppDetailsEnvelope, DlcApp, SteamApp, StoreSearchResponse,
+};
 use anyhow::{Context, Result};
+use regex::Regex;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const USER_AGENT: &str = "GoldbergDrop/0.1";
@@ -141,6 +145,117 @@ pub fn get_dlc_list(app_id: u32) -> Result<Vec<DlcApp>> {
     Ok(dlc_list)
 }
 
+/// Builds Goldberg `achievements.json` entries without a Steam Web API key:
+/// API names from `GetGlobalAchievementPercentagesForApp`, display text +
+/// icons from the public community achievements page, merged by list order
+/// (Steam keeps those lists aligned by unlock %).
+pub fn get_achievements(app_id: u32) -> Result<Vec<Achievement>> {
+    let names = fetch_achievement_api_names(app_id)?;
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = scrape_community_achievements(app_id)?;
+    let count = names.len().min(rows.len());
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    Ok(names
+        .into_iter()
+        .zip(rows)
+        .take(count)
+        .map(|(name, row)| Achievement {
+            name,
+            display_name: row.display_name,
+            description: row.description,
+            hidden: "0".into(),
+            icon: row.icon.clone(),
+            // Community page only exposes the unlocked art; reuse it for gray.
+            icongray: row.icon,
+        })
+        .collect())
+}
+
+#[derive(Debug)]
+struct CommunityAchRow {
+    display_name: String,
+    description: String,
+    icon: String,
+}
+
+fn fetch_achievement_api_names(app_id: u32) -> Result<Vec<String>> {
+    let client = client()?;
+    let url = "https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/";
+    let response = client
+        .get(url)
+        .query(&[("gameid", app_id.to_string())])
+        .send()
+        .context("Achievement percentages request failed")?;
+
+    let body: serde_json::Value = response
+        .json()
+        .context("Failed to parse achievement percentages")?;
+
+    let list = body
+        .pointer("/achievementpercentages/achievements")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(list
+        .into_iter()
+        .filter_map(|item| {
+            item.get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect())
+}
+
+fn scrape_community_achievements(app_id: u32) -> Result<Vec<CommunityAchRow>> {
+    let client = client()?;
+    let url = format!("https://steamcommunity.com/stats/{app_id}/achievements/?l=english");
+    let html = client
+        .get(&url)
+        .send()
+        .context("Community achievements request failed")?
+        .text()
+        .context("Failed to read community achievements page")?;
+
+    Ok(parse_community_achievement_rows(&html))
+}
+
+fn community_row_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?s)<div class="achieveRow[^"]*">.*?<img src="([^"]+)".*?<h3>(.*?)</h3>.*?<h5>(.*?)</h5>"#,
+        )
+        .expect("community achievement regex")
+    })
+}
+
+fn parse_community_achievement_rows(html: &str) -> Vec<CommunityAchRow> {
+    community_row_re()
+        .captures_iter(html)
+        .map(|caps| CommunityAchRow {
+            icon: caps[1].to_string(),
+            display_name: decode_html_entities(caps[2].trim()),
+            description: decode_html_entities(caps[3].trim()),
+        })
+        .collect()
+}
+
+fn decode_html_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#039;", "'")
+        .replace("&apos;", "'")
+}
+
 /// Fetches and parses the `appdetails` envelope for a single App ID.
 /// Returns `Ok(None)` if the API reports `success: false` for this ID.
 fn fetch_app_details(app_id: u32) -> Result<Option<AppDetailsEnvelope>> {
@@ -165,4 +280,36 @@ fn fetch_app_details(app_id: u32) -> Result<Option<AppDetailsEnvelope>> {
     }
 
     Ok(Some(envelope))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_community_rows_and_entities() {
+        let html = r#"
+<div class="achieveRow ">
+  <div class="achieveImgHolder">
+    <img src="https://example.com/a.jpg" width="64" height="64" border="0" />
+  </div>
+  <div class="achieveTxt">
+    <h3>Title &amp; More</h3>
+    <h5>Desc &#039;ok&#039;</h5>
+  </div>
+</div>
+<div class="achieveRow ">
+  <img src="https://example.com/b.jpg" />
+  <h3>Second</h3>
+  <h5></h5>
+</div>
+"#;
+        let rows = parse_community_achievement_rows(html);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].display_name, "Title & More");
+        assert_eq!(rows[0].description, "Desc 'ok'");
+        assert_eq!(rows[0].icon, "https://example.com/a.jpg");
+        assert_eq!(rows[1].display_name, "Second");
+        assert!(rows[1].description.is_empty());
+    }
 }

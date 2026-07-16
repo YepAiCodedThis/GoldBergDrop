@@ -1,4 +1,4 @@
-use crate::models::DlcApp;
+use crate::models::{Achievement, DlcApp};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,11 +16,13 @@ const MAX_SEARCH_DEPTH: usize = 8;
 pub struct SetupOptions {
     pub app_id: u32,
     pub dlc_list: Vec<DlcApp>,
+    pub achievements: Vec<Achievement>,
 }
 
 /// Applies the full Goldberg setup: writes `steam_appid.txt` and the
-/// `steam_settings` folder (including `DLC.txt` if any DLCs were supplied)
-/// in `game_dir`, then swaps in the Goldberg build of `steam_api(64).dll`.
+/// `steam_settings` folder (including `DLC.txt` / `achievements.json` when
+/// supplied) in `game_dir`, then swaps in the Goldberg build of
+/// `steam_api(64).dll`.
 ///
 /// If no `steam_api(64).dll` sits directly in `game_dir`, the whole
 /// directory tree beneath it is searched (subfolders included, e.g.
@@ -63,7 +65,8 @@ fn write_config(dir: &Path, options: &SetupOptions) -> Result<()> {
     let steam_settings_dir = dir.join("steam_settings");
     fs::create_dir_all(&steam_settings_dir).context("Failed to create steam_settings folder")?;
 
-    write_dlc_file(&steam_settings_dir, &options.dlc_list)
+    write_dlc_file(&steam_settings_dir, &options.dlc_list)?;
+    write_achievements_file(&steam_settings_dir, &options.achievements)
 }
 
 /// Finds every directory at or beneath `game_dir` that directly contains a
@@ -112,6 +115,22 @@ fn write_dlc_file(steam_settings_dir: &Path, dlc_list: &[DlcApp]) -> Result<()> 
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&dlc_txt, content + "\n").context("Failed to write steam_settings/DLC.txt")?;
+    Ok(())
+}
+
+fn write_achievements_file(
+    steam_settings_dir: &Path,
+    achievements: &[Achievement],
+) -> Result<()> {
+    let path = steam_settings_dir.join("achievements.json");
+    if achievements.is_empty() {
+        let _ = fs::remove_file(&path);
+        return Ok(());
+    }
+
+    let json = serde_json::to_string_pretty(achievements)
+        .context("Failed to serialize achievements.json")?;
+    fs::write(&path, json).context("Failed to write steam_settings/achievements.json")?;
     Ok(())
 }
 
@@ -222,6 +241,7 @@ mod tests {
         let options = SetupOptions {
             app_id: 4169770,
             dlc_list: vec![],
+            achievements: vec![],
         };
 
         let swapped = apply_setup(&game_dir, &cache_dir, &options).unwrap();
@@ -259,6 +279,7 @@ mod tests {
         let options = SetupOptions {
             app_id: 4169770,
             dlc_list: vec![],
+            achievements: vec![],
         };
 
         let swapped = apply_setup(&game_dir, &cache_dir, &options).unwrap();

@@ -436,14 +436,72 @@ pub fn download_mod(item: &GgItemResponse, dest_dir: &Path) -> Result<PathBuf> {
     Ok(dest_path)
 }
 
+/// GGNetwork `download` URLs are gate pages (`download.ggntw.com/{token}`).
+/// The real file is `{cdn}/{token}` on one of their CDN hosts.
+const GG_CDN_HOSTS: &[&str] = &[
+    "https://cdn.ggntw.ru",
+    "https://cdn.ggntw.com",
+    "https://hk-cdn.ggntw.com",
+];
+
 fn fetch_mod_bytes(download_url: &str) -> Result<Vec<u8>> {
     let client = client()?;
-    let response = client
+    let key = download_token_key(download_url)
+        .ok_or_else(|| anyhow!("GGNetwork download URL has no token"))?;
+
+    let mut last_err = None;
+    for host in GG_CDN_HOSTS {
+        let url = format!("{host}/{key}");
+        match fetch_binary_url(&client, &url) {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    // Last resort: hit the gate URL (older responses sometimes embedded a full CDN path).
+    if let Ok(bytes) = fetch_binary_url(&client, download_url) {
+        return Ok(bytes);
+    }
+    if let Ok(html) = client
         .get(download_url)
+        .header("Referer", "https://ggntw.com/")
+        .send()
+        .and_then(|r| r.text())
+    {
+        if let Some(cdn_url) = extract_cdn_file_url(&html) {
+            if let Ok(bytes) = fetch_binary_url(&client, &cdn_url) {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        anyhow!("Download blocked — try downloading manually from ggntw.com")
+    }))
+}
+
+fn download_token_key(download_url: &str) -> Option<String> {
+    let url = download_url.trim().trim_end_matches('/');
+    let key = url.rsplit('/').next()?.to_string();
+    // Gate tokens are long opaque strings; reject bare hosts / short paths.
+    if key.len() >= 32 && !key.contains('.') {
+        Some(key)
+    } else {
+        None
+    }
+}
+
+fn fetch_binary_url(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
+    let response = client
+        .get(url)
         .header("Referer", "https://ggntw.com/")
         .header("Origin", "https://ggntw.com")
         .send()
-        .context("Download request failed")?;
+        .with_context(|| format!("Download request failed: {url}"))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("Download HTTP {} for {url}", response.status());
+    }
 
     let content_type = response
         .headers()
@@ -452,43 +510,41 @@ fn fetch_mod_bytes(download_url: &str) -> Result<Vec<u8>> {
         .unwrap_or("")
         .to_lowercase();
 
-    let bytes = response.bytes().context("Failed to read download body")?;
+    let bytes = response
+        .bytes()
+        .with_context(|| format!("Failed to read download body: {url}"))?;
 
-    if looks_like_binary(&content_type, &bytes) {
-        return Ok(bytes.to_vec());
+    if !is_mod_payload(&content_type, &bytes) {
+        anyhow::bail!("Download returned HTML/empty payload from {url}");
     }
 
-    let html = std::str::from_utf8(&bytes).unwrap_or("");
-    if let Some(cdn_url) = extract_cdn_url(html) {
-        let cdn_response = client
-            .get(&cdn_url)
-            .header("Referer", "https://ggntw.com/")
-            .send()
-            .context("CDN download request failed")?;
-        return Ok(cdn_response.bytes()?.to_vec());
-    }
-
-    Err(anyhow!(
-        "Download blocked — try downloading manually from ggntw.com"
-    ))
+    Ok(bytes.to_vec())
 }
 
-fn looks_like_binary(content_type: &str, bytes: &[u8]) -> bool {
+fn is_mod_payload(content_type: &str, bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
     if content_type.contains("text/html") || content_type.contains("text/plain") {
         return false;
     }
-    if content_type.contains("octet-stream")
-        || content_type.contains("zip")
-        || content_type.contains("application/")
-    {
-        return true;
-    }
-    // Heuristic: HTML pages start with `<` or `<!`.
-    !bytes.starts_with(b"<")
+    !is_probably_html(bytes)
 }
 
-fn extract_cdn_url(html: &str) -> Option<String> {
-    let re = Regex::new(r#"https?://[^"'\s]*cdn\.ggntw\.(?:com|ru)[^"'\s]*"#).ok()?;
+fn is_probably_html(bytes: &[u8]) -> bool {
+    let start = bytes
+        .iter()
+        .position(|&b| !b.is_ascii_whitespace())
+        .unwrap_or(0);
+    bytes[start..].starts_with(b"<")
+}
+
+/// Full CDN file URL embedded in HTML (`https://cdn…/{token}`), not bare hosts.
+fn extract_cdn_file_url(html: &str) -> Option<String> {
+    let re = Regex::new(
+        r#"https?://(?:hk-)?cdn\.ggntw\.(?:com|ru)/[A-Za-z0-9_-]{32,}"#,
+    )
+    .ok()?;
     re.find(html).map(|m| m.as_str().to_string())
 }
 
@@ -508,6 +564,32 @@ mod tests {
             Some(1710929351)
         );
         assert_eq!(parse_workshop_id("not a url"), None);
+    }
+
+    #[test]
+    fn download_token_key_from_gate_url() {
+        let key = "RjdWcWpqAjYmamoQHXYg3TgvqpSKhGSxyeeiNTHMfYVoww0iagtcdluUeXFnO1MTxAR8OoUIIzGR5lB1djhmCZ2BWUDdU8OITrnQsXwp7SXUv5LD39yZWC3KTiBMN9MN";
+        let url = format!("https://download.ggntw.com/{key}");
+        assert_eq!(download_token_key(&url).as_deref(), Some(key));
+        assert!(download_token_key("https://cdn.ggntw.com/").is_none());
+        assert!(download_token_key("https://download.ggntw.com/short").is_none());
+    }
+
+    #[test]
+    fn rejects_html_payloads() {
+        assert!(is_probably_html(b"<!doctypehtml><title>404</title>"));
+        assert!(is_probably_html(b"  \n<html>"));
+        assert!(!is_probably_html(b"PK\x03\x04binary"));
+        assert!(!is_mod_payload("text/html", b"PK\x03\x04"));
+        assert!(is_mod_payload("application/zip", b"PK\x03\x04data"));
+    }
+
+    #[test]
+    fn extract_cdn_requires_token_path() {
+        let html = r#"href="https://cdn.ggntw.com" and https://cdn.ggntw.ru/RjdWcWpqAjYmamoQHXYg3TgvqpSKhGSxyeeiNTHMfYVoww0iagtcdluUeXFnO1MT"#;
+        let url = extract_cdn_file_url(html).unwrap();
+        assert!(url.starts_with("https://cdn.ggntw.ru/"));
+        assert!(extract_cdn_file_url(r#"https://cdn.ggntw.com"#).is_none());
     }
 
     #[test]

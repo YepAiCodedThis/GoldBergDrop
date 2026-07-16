@@ -94,6 +94,7 @@ enum WorkerMsg {
         name: String,
         dll_swapped: bool,
         dlc_count: usize,
+        achievement_count: usize,
     },
     ApplyFailed(String),
     WorkshopDownloadDone {
@@ -127,6 +128,7 @@ enum WorkerMsg {
 pub struct GoldbergDropApp {
     exe_path: Option<PathBuf>,
     fetch_dlc: bool,
+    fetch_achievements: bool,
 
     sendto_enabled: bool,
     sendto_stale: bool,
@@ -389,6 +391,7 @@ impl GoldbergDropApp {
         let mut app = Self {
             exe_path: None,
             fetch_dlc: settings.fetch_dlc_default,
+            fetch_achievements: settings.fetch_achievements_default,
             sendto_enabled: sendto_status != SendToStatus::Disabled,
             sendto_stale: sendto_status == SendToStatus::Stale,
             sendto_notice: None,
@@ -627,10 +630,11 @@ impl GoldbergDropApp {
         self.working_message = format!("Applying Goldberg setup for \"{name}\"...");
         self.screen = Screen::Working;
         let fetch_dlc = self.fetch_dlc;
+        let fetch_achievements = self.fetch_achievements;
         let tx = self.tx.clone();
 
         std::thread::spawn(move || {
-            let result = (|| -> anyhow::Result<(bool, usize)> {
+            let result = (|| -> anyhow::Result<(bool, usize, usize)> {
                 let cache_dir = emulator::ensure_goldberg_available()?;
 
                 let dlc_list: Vec<DlcApp> = if fetch_dlc {
@@ -640,21 +644,33 @@ impl GoldbergDropApp {
                 };
                 let dlc_count = dlc_list.len();
 
+                let achievements = if fetch_achievements {
+                    steam::get_achievements(app_id).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let achievement_count = achievements.len();
+
                 let swapped = goldberg::apply_setup(
                     &game_dir,
                     &cache_dir,
-                    &SetupOptions { app_id, dlc_list },
+                    &SetupOptions {
+                        app_id,
+                        dlc_list,
+                        achievements,
+                    },
                 )?;
 
-                Ok((swapped, dlc_count))
+                Ok((swapped, dlc_count, achievement_count))
             })();
 
             let msg = match result {
-                Ok((dll_swapped, dlc_count)) => WorkerMsg::ApplyDone {
+                Ok((dll_swapped, dlc_count, achievement_count)) => WorkerMsg::ApplyDone {
                     app_id,
                     name,
                     dll_swapped,
                     dlc_count,
+                    achievement_count,
                 },
                 Err(e) => WorkerMsg::ApplyFailed(e.to_string()),
             };
@@ -698,6 +714,7 @@ impl GoldbergDropApp {
                     name,
                     dll_swapped,
                     dlc_count,
+                    achievement_count,
                 } => {
                     let dll_msg = if dll_swapped {
                         "steam_api(64).dll replaced with Goldberg build."
@@ -712,8 +729,13 @@ impl GoldbergDropApp {
                     } else {
                         String::new()
                     };
+                    let ach_msg = if achievement_count > 0 {
+                        format!(" Wrote {achievement_count} achievements.")
+                    } else {
+                        String::new()
+                    };
                     self.result_message = format!(
-                        "Done! \"{name}\" (AppID {app_id}) is set up.\n{dll_msg}{dlc_msg}"
+                        "Done! \"{name}\" (AppID {app_id}) is set up.\n{dll_msg}{dlc_msg}{ach_msg}"
                     );
                     self.screen = Screen::Done;
                     if let Some(exe) = self.exe_path.clone() {
@@ -738,7 +760,7 @@ impl GoldbergDropApp {
                         entry.status = QueueStatus::Done;
                         entry.mod_name = mod_name;
                         entry.game_name = game_name;
-                        let _ = path;
+                        entry.download_path = Some(path);
                     }
                     self.try_process_queue();
                 }
@@ -758,10 +780,11 @@ impl GoldbergDropApp {
                     for (index, result) in results {
                         if let Some(entry) = self.download_queue.get_mut(index) {
                             match result {
-                                Ok((_path, mod_name, game_name)) => {
+                                Ok((path, mod_name, game_name)) => {
                                     entry.status = QueueStatus::Done;
                                     entry.mod_name = mod_name;
                                     entry.game_name = game_name;
+                                    entry.download_path = Some(path);
                                 }
                                 Err(_error) => {
                                     entry.status =
@@ -958,6 +981,7 @@ impl GoldbergDropApp {
             status: QueueStatus::Queued,
             gg_item: None,
             gg_available: None,
+            download_path: None,
         });
 
         // Serial resolve worker — parallel scrapes hit Steam HTTP 429.
@@ -1351,6 +1375,63 @@ enum QueueOutcome {
         game_name: String,
         path: PathBuf,
     },
+}
+
+/// Opens the download folder in Explorer via ShellExecute (not `explorer.exe`
+/// argv — that parser breaks on spaces and opens Documents instead).
+fn open_download_in_explorer(path: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        let folder = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| path.to_path_buf())
+        };
+
+        let wide: Vec<u16> = folder
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let open: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut core::ffi::c_void,
+                lp_operation: *const u16,
+                lp_file: *const u16,
+                lp_parameters: *const u16,
+                lp_directory: *const u16,
+                n_show_cmd: i32,
+            ) -> isize;
+        }
+
+        // >32 means success for ShellExecute.
+        let _ = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                open.as_ptr(),
+                wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // SW_SHOWNORMAL
+            )
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        let dir = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+    }
 }
 
 fn process_queue_item(
@@ -2015,12 +2096,21 @@ impl GoldbergDropApp {
                 egui::vec2(queue_cols::ACTION, QUEUE_ROW_HEIGHT),
                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                 |ui| {
-                    if matches!(
-                        item.status,
-                        QueueStatus::Queued | QueueStatus::Failed(_)
-                    ) && Self::queue_remove_button(ui).clicked()
-                    {
-                        remove_index = Some(index);
+                    match item.status {
+                        QueueStatus::Done => {
+                            if item.download_path.is_some() && Self::queue_folder_button(ui).clicked()
+                            {
+                                if let Some(path) = &item.download_path {
+                                    open_download_in_explorer(path);
+                                }
+                            }
+                        }
+                        QueueStatus::Queued | QueueStatus::Failed(_) => {
+                            if Self::queue_remove_button(ui).clicked() {
+                                remove_index = Some(index);
+                            }
+                        }
+                        QueueStatus::Downloading => {}
                     }
                 },
             );
@@ -2052,6 +2142,21 @@ impl GoldbergDropApp {
             queue_cols::ACTION,
             11.0,
         )
+    }
+
+    fn queue_folder_button(ui: &mut egui::Ui) -> egui::Response {
+        Self::paint_button(
+            ui,
+            "📁",
+            Color32::TRANSPARENT,
+            colors::SURFACE_HOVER,
+            Stroke::NONE,
+            colors::TEXT_MUTED,
+            20.0,
+            queue_cols::ACTION,
+            12.0,
+        )
+        .on_hover_text("Open download folder")
     }
 
     fn has_queued_items(&self) -> bool {
@@ -2372,9 +2477,19 @@ impl GoldbergDropApp {
                     self.fetch_dlc = self.settings.fetch_dlc_default;
                     dirty = true;
                 }
+                if ui
+                    .checkbox(
+                        &mut self.settings.fetch_achievements_default,
+                        "Fetch achievements by default",
+                    )
+                    .changed()
+                {
+                    self.fetch_achievements = self.settings.fetch_achievements_default;
+                    dirty = true;
+                }
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Applies to new sessions and syncs the Setup-tab checkbox.")
+                    RichText::new("Applies to new sessions and syncs the Setup-tab checkboxes.")
                         .color(colors::TEXT_MUTED)
                         .size(11.0),
                 );
@@ -2510,6 +2625,14 @@ impl GoldbergDropApp {
         ui.horizontal(|ui| {
             if ui.checkbox(&mut self.fetch_dlc, "Fetch DLCs").changed() {
                 self.settings.fetch_dlc_default = self.fetch_dlc;
+                self.persist_settings();
+            }
+            ui.add_space(16.0);
+            if ui
+                .checkbox(&mut self.fetch_achievements, "Fetch achievements")
+                .changed()
+            {
+                self.settings.fetch_achievements_default = self.fetch_achievements;
                 self.persist_settings();
             }
             ui.add_space(16.0);

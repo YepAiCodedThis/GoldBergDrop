@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SteamApp {
@@ -10,6 +11,19 @@ pub struct SteamApp {
 pub struct DlcApp {
     pub app_id: u32,
     pub name: String,
+}
+
+/// One entry for Goldberg `steam_settings/achievements.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Achievement {
+    pub name: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    pub description: String,
+    /// Goldberg expects `"0"` / `"1"` strings, not booleans.
+    pub hidden: String,
+    pub icon: String,
+    pub icongray: String,
 }
 
 /// Store search response from `store.steampowered.com/api/storesearch`.
@@ -121,4 +135,6 @@ pub struct QueueItem {
     pub gg_item: Option<GgItemResponse>,
     /// `None` while resolving; `Some(false)` = not cached on GGNetwork (show `!`).
     pub gg_available: Option<bool>,
+    /// Local file/folder after a successful download (`Done`).
+    pub download_path: Option<PathBuf>,
 }
