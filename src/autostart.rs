@@ -1,9 +1,35 @@
 //! Autostart GoldbergDrop minimized to tray (Windows Startup / Run key).
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const RUN_VALUE: &str = "GoldbergDrop";
+
+/// Path for the Run registry value. Avoids `canonicalize()` — on Windows that
+/// yields a `\\?\` extended path which the Run key fails to launch.
+fn autostart_exe_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("current_exe")?;
+    Ok(strip_unc_prefix(&exe))
+}
+
+#[cfg(windows)]
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+fn format_run_command(exe: &Path) -> String {
+    format!("\"{}\" --tray", exe.display())
+}
 
 #[cfg(windows)]
 pub fn is_enabled() -> bool {
@@ -29,14 +55,7 @@ pub fn enable() -> Result<()> {
     use winreg::enums::*;
     use winreg::RegKey;
 
-    let exe = std::env::current_exe().context("current_exe")?;
-    let exe = exe
-        .canonicalize()
-        .unwrap_or(exe)
-        .to_string_lossy()
-        .to_string();
-    // Quotes for spaces; --tray starts hidden in the notification area.
-    let cmd = format!("\"{exe}\" --tray");
+    let cmd = format_run_command(&autostart_exe_path()?);
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")?;
@@ -73,4 +92,27 @@ pub fn disable() -> Result<()> {
 #[allow(dead_code)]
 pub fn shortcut_hint() -> PathBuf {
     PathBuf::from(r"%APPDATA%\…\Run\GoldbergDrop")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_unc_prefix() {
+        assert_eq!(
+            strip_unc_prefix(Path::new(r"\\?\C:\Games\1. GB\app.exe")),
+            PathBuf::from(r"C:\Games\1. GB\app.exe")
+        );
+        assert_eq!(
+            strip_unc_prefix(Path::new(r"C:\Games\app.exe")),
+            PathBuf::from(r"C:\Games\app.exe")
+        );
+    }
+
+    #[test]
+    fn run_command_quotes_spaces() {
+        let cmd = format_run_command(Path::new(r"C:\Games\1. GB\goldberg-drop.exe"));
+        assert_eq!(cmd, r#""C:\Games\1. GB\goldberg-drop.exe" --tray"#);
+    }
 }

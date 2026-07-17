@@ -12,6 +12,8 @@ const ID_EMPTY: &str = "empty";
 
 pub enum TrayCmd {
     ShowWindow,
+    Quit,
+    LaunchGame(u32),
 }
 
 pub struct TrayHandle {
@@ -36,7 +38,7 @@ impl TrayHandle {
             .build()
             .context("Failed to create tray icon")?;
 
-        let tx = cmd_tx;
+        let tx_click = cmd_tx.clone();
         std::thread::spawn(move || {
             while let Ok(event) = tray_icon::TrayIconEvent::receiver().recv() {
                 match event {
@@ -45,9 +47,26 @@ impl TrayHandle {
                         button_state: tray_icon::MouseButtonState::Up,
                         ..
                     } => {
-                        let _ = tx.send(TrayCmd::ShowWindow);
+                        let _ = tx_click.send(TrayCmd::ShowWindow);
                     }
                     _ => {}
+                }
+            }
+        });
+
+        // Menu clicks must not depend on the egui frame loop — when the main
+        // window is hidden, `App::ui` is not called and menu actions stall.
+        std::thread::spawn(move || {
+            while let Ok(event) = tray_icon::menu::MenuEvent::receiver().recv() {
+                let id = event.id.as_ref();
+                if id == ID_OPEN {
+                    let _ = cmd_tx.send(TrayCmd::ShowWindow);
+                } else if id == ID_QUIT {
+                    let _ = cmd_tx.send(TrayCmd::Quit);
+                } else if let Some(app_id_str) = id.strip_prefix("game_") {
+                    if let Ok(app_id) = app_id_str.parse::<u32>() {
+                        let _ = cmd_tx.send(TrayCmd::LaunchGame(app_id));
+                    }
                 }
             }
         });

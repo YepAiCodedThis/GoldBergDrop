@@ -422,7 +422,8 @@ impl GoldbergDropApp {
             steamcmd_exhausted: false,
             tray: None,
             tray_banner_until: None,
-            dormant_in_tray: start_in_tray,
+            // `--tray` at boot: stay icon-only unless a file was passed on the CLI.
+            dormant_in_tray: start_in_tray && initial_path.is_none(),
             resolve_tx,
             tx,
             rx,
@@ -486,6 +487,20 @@ impl GoldbergDropApp {
         }
     }
 
+    /// While dormant, keep the native window hidden. eframe calls
+    /// `window.set_visible(true)` after the first frame paint, which would
+    /// flash the UI on autostart (`--tray`) without this guard.
+    fn enforce_tray_hidden(&self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if !self.dormant_in_tray {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(window) = frame.winit_window() {
+            window.set_visible(false);
+        }
+    }
+
     fn restore_main_viewport_size(&self, ctx: &egui::Context) {
         let s = crate::WINDOW_SIZE;
         ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(s, s)));
@@ -499,18 +514,11 @@ impl GoldbergDropApp {
             .as_ref()
             .map(|t| t.rx.try_iter().collect())
             .unwrap_or_default();
-        for _cmd in cmds {
-            self.show_from_tray(ctx);
-        }
-
-        while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-            let id = event.id.as_ref();
-            if id == "open" {
-                self.show_from_tray(ctx);
-            } else if id == "quit" {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            } else if let Some(app_id_str) = id.strip_prefix("game_") {
-                if let Ok(app_id) = app_id_str.parse::<u32>() {
+        for cmd in cmds {
+            match cmd {
+                tray::TrayCmd::ShowWindow => self.show_from_tray(ctx),
+                tray::TrayCmd::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                tray::TrayCmd::LaunchGame(app_id) => {
                     let games = games::load();
                     if let Some(g) = games.iter().find(|g| g.app_id == app_id) {
                         if let Err(e) = tray::launch_game(&g.exe_path) {
@@ -523,6 +531,18 @@ impl GoldbergDropApp {
 
         if self.tray.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    fn poll_tray_banner(&mut self, ctx: &egui::Context) {
+        if let Some(until) = self.tray_banner_until {
+            if Instant::now() >= until {
+                self.tray_banner_until = None;
+                self.dormant_in_tray = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
         }
     }
 
@@ -1516,6 +1536,26 @@ impl eframe::App for GoldbergDropApp {
         Color32::TRANSPARENT.to_normalized_gamma_f32()
     }
 
+    /// Runs even when the window is hidden — tray + worker must live here, not
+    /// only in `ui`, or tray-menu actions stall until the window is focused.
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.poll_worker();
+        self.poll_tray(ctx);
+        self.poll_tray_banner(ctx);
+        self.enforce_tray_hidden(ctx, frame);
+
+        if self.dormant_in_tray || self.tray.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+
+        if self.screen == Screen::Working
+            || self.queue_processing
+            || self.queue_lookup_pending()
+        {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Keep solid + contrasted scrollbars if style gets reset.
         if ui.style().spacing.scroll.floating || !ui.style().spacing.scroll.foreground_color {
@@ -1528,29 +1568,8 @@ impl eframe::App for GoldbergDropApp {
             });
         }
 
-        self.poll_worker();
         let ctx = ui.ctx().clone();
-        self.poll_tray(&ctx);
         self.handle_dropped_files(&ctx);
-
-        if let Some(until) = self.tray_banner_until {
-            if Instant::now() >= until {
-                self.tray_banner_until = None;
-                self.dormant_in_tray = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            } else {
-                ctx.request_repaint_after(Duration::from_millis(50));
-            }
-        }
-
-        // Repaint periodically while a background task is running so the
-        // UI picks up worker messages promptly.
-        if self.screen == Screen::Working
-            || self.queue_processing
-            || self.queue_lookup_pending()
-        {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        }
 
         let panel_frame = egui::Frame::new()
             .fill(colors::PANEL_BG)

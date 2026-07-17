@@ -25,6 +25,13 @@ pub const WINDOW_SIZE: f32 = 462.0;
 pub const APP_ICON_PNG: &[u8] = include_bytes!("../assets/app_icon_128.png");
 
 fn main() -> eframe::Result<()> {
+    // Run-key / Send-to launches often start with cwd = System32 — use exe dir.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let _ = std::env::set_current_dir(dir);
+        }
+    }
+
     let mut start_in_tray = false;
     let mut initial_path: Option<PathBuf> = None;
     for arg in std::env::args().skip(1) {
@@ -71,10 +78,15 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             GoldbergDropApp::apply_style(&cc.egui_ctx);
             install_symbol_fallback_font(&cc.egui_ctx);
-            Ok(Box::new(GoldbergDropApp::new(
-                initial_path,
-                start_in_tray,
-            )))
+            let boot_hidden = start_in_tray && initial_path.is_none();
+            let app = GoldbergDropApp::new(initial_path, start_in_tray);
+            if boot_hidden {
+                // eframe forces the window visible after the first paint; hide now
+                // and keep enforcing in `logic()` while dormant.
+                cc.egui_ctx
+                    .send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
+            }
+            Ok(Box::new(app))
         }),
     )
 }
