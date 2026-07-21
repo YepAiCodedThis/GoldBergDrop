@@ -58,7 +58,7 @@ GoldbergDrop only automates setup — it never ships game files.
 - Get `goldberg-drop.exe` from **[Releases](../../releases)**
 - Single portable file — no installer, no API key
 - Needs internet for lookups, optional DLC/Workshop, and the one-time Goldberg download (then cached)
-- **7-Zip** recommended for GreenLuma / CSF archives (`7z.exe` in Program Files or on PATH)
+- **[7-Zip](https://www.7-zip.org/) must be installed** for GreenLuma install and CSF pack import (`7z.exe` in Program Files or on PATH)
 
 > SmartScreen may warn (unsigned) → **More info → Run anyway**
 
@@ -80,6 +80,8 @@ Enable **"Send to" entry** once on the Setup tab to add GoldbergDrop to Explorer
 ### GreenLuma
 
 Alternative to Goldberg: run Steam with [GreenLuma](https://cs.rin.ru/) (Steam006) via DLLInjector (stealth any-folder).
+
+**Requires [7-Zip](https://www.7-zip.org/)** — without `7z.exe`, GreenLuma install and CSF archive import will fail.
 
 1. Open the **GreenLuma** ribbon tab → **Install GreenLuma** (allow/exclude the `greenluma` folder under AppData in Defender first — injector DLLs often false-positive).
 2. Bundled archive is password-protected and **SHA256-whitelisted**; modified binaries are rejected.
