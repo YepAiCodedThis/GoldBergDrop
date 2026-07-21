@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "goldberg-drop"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1955,15 +1955,18 @@ dependencies = [
  "eframe",
  "egui",
  "image",
+ "log",
  "mslnk",
  "regex",
  "reqwest",
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
  "tray-icon",
  "walkdir",
  "win-icon-extractor",
+ "winit",
  "winreg",
  "winresource",
  "zip",

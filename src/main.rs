@@ -1,19 +1,24 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod archive;
 mod autostart;
 mod emulator;
 mod games;
 mod goldberg;
+mod greenluma;
+mod logging;
 mod models;
 mod sendto;
 mod settings;
+mod single_instance;
 mod steam;
 mod steamcmd;
 mod tray;
 mod workshop;
 
 use app::GoldbergDropApp;
+use single_instance::{Claim, IpcCommand};
 use std::path::PathBuf;
 
 /// Square side length of the custom window, in logical points.
@@ -32,15 +37,41 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    logging::init();
+
     let mut start_in_tray = false;
+    let mut open_greenluma = false;
     let mut initial_path: Option<PathBuf> = None;
     for arg in std::env::args().skip(1) {
         if arg == "--tray" || arg == "-tray" {
             start_in_tray = true;
+        } else if arg == "--greenluma" || arg == "-greenluma" {
+            open_greenluma = true;
         } else if !arg.starts_with('-') && initial_path.is_none() {
             initial_path = Some(PathBuf::from(arg));
         }
     }
+
+    log::info!(
+        "parsed args: tray={start_in_tray} greenluma={open_greenluma} path={initial_path:?}"
+    );
+
+    let ipc = IpcCommand {
+        greenluma: open_greenluma,
+        path: initial_path.clone(),
+        show: !start_in_tray || initial_path.is_some() || open_greenluma,
+    };
+    let quiet_tray = start_in_tray && initial_path.is_none() && !open_greenluma;
+    let instance_guard = match single_instance::claim_or_forward(&ipc, quiet_tray) {
+        Claim::Primary(guard) => {
+            log::info!("single-instance: primary");
+            guard
+        }
+        Claim::Secondary => {
+            log::info!("single-instance: secondary (forwarded or quiet exit)");
+            return Ok(());
+        }
+    };
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size([WINDOW_SIZE, WINDOW_SIZE])
@@ -79,7 +110,8 @@ fn main() -> eframe::Result<()> {
             GoldbergDropApp::apply_style(&cc.egui_ctx);
             install_symbol_fallback_font(&cc.egui_ctx);
             let boot_hidden = start_in_tray && initial_path.is_none();
-            let app = GoldbergDropApp::new(initial_path, start_in_tray);
+            let mut app = GoldbergDropApp::new(initial_path, start_in_tray, open_greenluma);
+            app.set_instance_guard(instance_guard);
             if boot_hidden {
                 // eframe forces the window visible after the first paint; hide now
                 // and keep enforcing in `logic()` while dormant.

@@ -1,20 +1,8 @@
 //! Integration with Windows' native "Send to" right-click menu.
 //!
-//! Rather than installing a full shell-extension context menu handler (which
-//! needs a registered COM DLL and admin rights to install system-wide), we
-//! hook into the "Send to" submenu that Windows Explorer already builds from
-//! shortcut (`.lnk`) files in the per-user
-//! `%APPDATA%\Microsoft\Windows\SendTo` folder. This is exactly what that
-//! folder is designed for, needs no admin rights, and Explorer passes the
-//! right-clicked file's path as `argv[1]` to the target — which is all we
-//! need to auto-start a search/apply run.
-//!
-//! The tricky part is that a `.lnk` shortcut hard-codes an absolute path to
-//! `goldberg-drop.exe`. If the user later moves this executable, the shortcut
-//! silently starts pointing at a dead location. To catch that, we remember
-//! which path we last pointed the shortcut at (in a small state file next to
-//! the Goldberg cache) and compare it against [`std::env::current_exe`] on
-//! every launch, so the UI can tell the user to re-enable it.
+//! Two shortcuts:
+//! - `GoldbergDrop.lnk` — Setup tab (no args)
+//! - `GoldbergDrop (GreenLuma).lnk` — GreenLuma tab (`--greenluma`)
 
 use anyhow::{Context, Result};
 use mslnk::ShellLink;
@@ -23,6 +11,9 @@ use std::fs;
 use std::path::PathBuf;
 
 const SHORTCUT_FILE_NAME: &str = "GoldbergDrop.lnk";
+const SHORTCUT_GL_FILE_NAME: &str = "GoldbergDrop (GreenLuma).lnk";
+const STATE_FILE: &str = "sendto_state.json";
+const STATE_GL_FILE: &str = "sendto_greenluma_state.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendToStatus {
@@ -41,24 +32,24 @@ struct SendToState {
     registered_exe: Option<PathBuf>,
 }
 
-fn state_file() -> Result<PathBuf> {
+fn state_path(name: &str) -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("com", "GoldbergDrop", "GoldbergDrop")
         .context("Could not determine AppData directory")?;
     let dir = dirs.data_dir();
     fs::create_dir_all(dir).context("Failed to create app data directory")?;
-    Ok(dir.join("sendto_state.json"))
+    Ok(dir.join(name))
 }
 
-fn load_state() -> SendToState {
-    state_file()
+fn load_state(name: &str) -> SendToState {
+    state_path(name)
         .ok()
         .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
 }
 
-fn save_state(state: &SendToState) -> Result<()> {
-    let path = state_file()?;
+fn save_state(name: &str, state: &SendToState) -> Result<()> {
+    let path = state_path(name)?;
     let json = serde_json::to_string_pretty(state)?;
     fs::write(path, json).context("Failed to save Send To settings")?;
     Ok(())
@@ -76,14 +67,19 @@ fn sendto_dir() -> Result<PathBuf> {
         .join("SendTo"))
 }
 
-fn shortcut_path() -> Result<PathBuf> {
-    Ok(sendto_dir()?.join(SHORTCUT_FILE_NAME))
+fn shortcut_path(name: &str) -> Result<PathBuf> {
+    Ok(sendto_dir()?.join(name))
 }
 
-/// Checks whether the "Send to" entry is enabled, and whether it still points
-/// at the currently running executable.
-pub fn status() -> SendToStatus {
-    let state = load_state();
+fn paths_match(a: &PathBuf, b: &PathBuf) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+fn status_for(state_file: &str) -> SendToStatus {
+    let state = load_state(state_file);
     if !state.enabled {
         return SendToStatus::Disabled;
     }
@@ -95,16 +91,7 @@ pub fn status() -> SendToStatus {
     }
 }
 
-fn paths_match(a: &PathBuf, b: &PathBuf) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
-}
-
-/// Creates/refreshes the "Send to" shortcut so it points at the currently
-/// running executable.
-pub fn enable() -> Result<()> {
+fn write_shortcut(lnk_name: &str, arguments: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe().context("Could not determine this executable's path")?;
     let dir = sendto_dir()?;
     fs::create_dir_all(&dir).context("Failed to create the Windows \"Send to\" folder")?;
@@ -112,28 +99,66 @@ pub fn enable() -> Result<()> {
     let exe_str = exe
         .to_str()
         .context("Executable path is not valid UTF-8")?;
-    let link = ShellLink::new(exe_str).context("Failed to build the shortcut")?;
-    link.create_lnk(shortcut_path()?)
+    let mut link = ShellLink::new(exe_str).context("Failed to build the shortcut")?;
+    link.set_arguments(arguments.map(|s| s.to_string()));
+    link.create_lnk(shortcut_path(lnk_name)?)
         .context("Failed to write the \"Send to\" shortcut")?;
-
-    save_state(&SendToState {
-        enabled: true,
-        registered_exe: Some(exe),
-    })?;
     Ok(())
 }
 
-/// Removes the "Send to" shortcut, if present, and marks the feature as
-/// disabled.
-pub fn disable() -> Result<()> {
-    if let Ok(path) = shortcut_path() {
+fn enable_for(state_file: &str, lnk_name: &str, arguments: Option<&str>) -> Result<()> {
+    let exe = std::env::current_exe().context("Could not determine this executable's path")?;
+    write_shortcut(lnk_name, arguments)?;
+    save_state(
+        state_file,
+        &SendToState {
+            enabled: true,
+            registered_exe: Some(exe),
+        },
+    )?;
+    Ok(())
+}
+
+fn disable_for(state_file: &str, lnk_name: &str) -> Result<()> {
+    if let Ok(path) = shortcut_path(lnk_name) {
         let _ = fs::remove_file(path);
     }
-    save_state(&SendToState {
-        enabled: false,
-        registered_exe: None,
-    })?;
+    save_state(
+        state_file,
+        &SendToState {
+            enabled: false,
+            registered_exe: None,
+        },
+    )?;
     Ok(())
+}
+
+/// Checks whether the Goldberg "Send to" entry is enabled / stale.
+pub fn status() -> SendToStatus {
+    status_for(STATE_FILE)
+}
+
+/// Creates/refreshes the Goldberg "Send to" shortcut.
+pub fn enable() -> Result<()> {
+    enable_for(STATE_FILE, SHORTCUT_FILE_NAME, None)
+}
+
+/// Removes the Goldberg "Send to" shortcut.
+pub fn disable() -> Result<()> {
+    disable_for(STATE_FILE, SHORTCUT_FILE_NAME)
+}
+
+/// GreenLuma "Send to" status (separate shortcut + state).
+pub fn status_greenluma() -> SendToStatus {
+    status_for(STATE_GL_FILE)
+}
+
+pub fn enable_greenluma() -> Result<()> {
+    enable_for(STATE_GL_FILE, SHORTCUT_GL_FILE_NAME, Some("--greenluma"))
+}
+
+pub fn disable_greenluma() -> Result<()> {
+    disable_for(STATE_GL_FILE, SHORTCUT_GL_FILE_NAME)
 }
 
 #[cfg(test)]
@@ -153,24 +178,20 @@ mod tests {
         assert!(!paths_match(&a, &b));
     }
 
-    /// Exercises the real Windows "Send to" folder and AppData state file.
-    /// Not run by default (`cargo test`) since it touches real user state;
-    /// run explicitly with `cargo test -- --ignored` to sanity-check on a
-    /// real Windows machine.
     #[test]
     #[ignore]
     fn enable_then_disable_round_trip_on_real_machine() {
         disable().unwrap();
         assert_eq!(status(), SendToStatus::Disabled);
-        assert!(!shortcut_path().unwrap().exists());
+        assert!(!shortcut_path(SHORTCUT_FILE_NAME).unwrap().exists());
 
         enable().unwrap();
         assert_eq!(status(), SendToStatus::Enabled);
-        assert!(shortcut_path().unwrap().exists());
+        assert!(shortcut_path(SHORTCUT_FILE_NAME).unwrap().exists());
 
         disable().unwrap();
         assert_eq!(status(), SendToStatus::Disabled);
-        assert!(!shortcut_path().unwrap().exists());
+        assert!(!shortcut_path(SHORTCUT_FILE_NAME).unwrap().exists());
     }
 
     #[test]

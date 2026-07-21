@@ -2,7 +2,7 @@ use crate::goldberg::{self, SetupOptions};
 use crate::models::{DlcApp, GgItemResponse, QueueItem, QueueStatus, SteamApp};
 use crate::sendto::{self, SendToStatus};
 use crate::settings::{AppSettings, SettingsTab};
-use crate::{autostart, emulator, games, steam, steamcmd, tray, workshop};
+use crate::{archive, autostart, emulator, games, greenluma, steam, steamcmd, tray, workshop};
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -68,6 +68,7 @@ mod fail_cols {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppTab {
     Setup,
+    GreenLuma,
     WorkshopDl,
     Settings,
 }
@@ -122,6 +123,16 @@ enum WorkerMsg {
     /// SteamCMD zip download + extract + first-run bootstrap finished.
     SteamCmdEnsureDone {
         error: Option<String>,
+    },
+    GreenLumaDone {
+        message: String,
+    },
+    GreenLumaFailed {
+        error: String,
+    },
+    /// Background watch: Steam download/update while last mode was GreenLuma.
+    GlDownloadDetected {
+        hits: Vec<(u32, String)>,
     },
 }
 
@@ -185,16 +196,41 @@ pub struct GoldbergDropApp {
 
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
+
+    // --- GreenLuma tab ---
+    gl_installed: bool,
+    gl_busy: bool,
+    gl_status: String,
+    gl_status_error: bool,
+    /// Show Defender warning before first install.
+    gl_show_defender_warn: bool,
+    gl_archive_password: String,
+    gl_sendto_enabled: bool,
+    gl_sendto_stale: bool,
+    gl_sendto_notice: Option<(String, bool)>,
+    /// Exe AppID lookup should add to AppList instead of Goldberg apply.
+    gl_lookup_mode: bool,
+    gl_auto_inject_notice: Option<(String, bool)>,
+    /// Steam download detected while running under GreenLuma — prompt to restart plain.
+    gl_download_overlay_open: bool,
+    /// Session: don't re-prompt after dismiss / "don't ask".
+    gl_download_overlay_suppress: bool,
+    gl_download_hits: Vec<(u32, String)>,
+    gl_download_alerted: std::collections::HashSet<u32>,
+
+    /// Keeps the single-instance mutex alive for the process lifetime.
+    #[allow(dead_code)]
+    instance_guard: Option<crate::single_instance::InstanceGuard>,
 }
 
 impl Default for GoldbergDropApp {
     fn default() -> Self {
-        Self::new(None, false)
+        Self::new(None, false, false)
     }
 }
 
 impl GoldbergDropApp {
-    pub fn new(initial_path: Option<PathBuf>, start_in_tray: bool) -> Self {
+    pub fn new(initial_path: Option<PathBuf>, start_in_tray: bool, open_greenluma: bool) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let (resolve_tx, resolve_rx) = std::sync::mpsc::channel::<u64>();
         let resolve_ui_tx = tx.clone();
@@ -387,7 +423,9 @@ impl GoldbergDropApp {
         });
 
         let sendto_status = sendto::status();
+        let gl_sendto_status = sendto::status_greenluma();
         let settings = AppSettings::load();
+        let gl_installed = greenluma::is_installed();
         let mut app = Self {
             exe_path: None,
             fetch_dlc: settings.fetch_dlc_default,
@@ -403,7 +441,11 @@ impl GoldbergDropApp {
             selected_match_name: None,
             result_message: String::new(),
             icon_texture: None,
-            active_tab: AppTab::Setup,
+            active_tab: if open_greenluma {
+                AppTab::GreenLuma
+            } else {
+                AppTab::Setup
+            },
             settings,
             settings_tab: SettingsTab::Download,
             force_steamcmd: false,
@@ -427,23 +469,62 @@ impl GoldbergDropApp {
             resolve_tx,
             tx,
             rx,
+            gl_installed,
+            gl_busy: false,
+            gl_status: if gl_installed {
+                format!("GreenLuma {} ready.", greenluma::bundled_version())
+            } else {
+                "GreenLuma not installed.".into()
+            },
+            gl_status_error: false,
+            gl_show_defender_warn: false,
+            gl_archive_password: String::new(),
+            gl_sendto_enabled: gl_sendto_status != SendToStatus::Disabled,
+            gl_sendto_stale: gl_sendto_status == SendToStatus::Stale,
+            gl_sendto_notice: None,
+            gl_lookup_mode: false,
+            gl_auto_inject_notice: None,
+            gl_download_overlay_open: false,
+            gl_download_overlay_suppress: false,
+            gl_download_hits: Vec::new(),
+            gl_download_alerted: std::collections::HashSet::new(),
+            instance_guard: None,
         };
         // Always create tray so tracked games are launchable from the icon.
         app.ensure_tray();
-        if app.settings.autostart_tray {
+        if app.settings.autostart_tray || app.settings.greenluma_auto_inject {
             let _ = autostart::enable();
+            let _ = autostart::ensure_gbd_run_valid();
         }
         if start_in_tray {
             if let Some(t) = &app.tray {
                 t.set_tooltip("GoldbergDrop — running in tray");
             }
         }
+        // Auto-inject Steam via GreenLuma when configured.
+        if app.settings.greenluma_auto_inject && app.gl_installed {
+            if let Err(e) = greenluma::start_steam_injected() {
+                log::error!("GreenLuma auto-inject: {e:#}");
+            } else {
+                // Steam may already be up via Run/DLLInjector — treat as GL play mode.
+                greenluma::set_steam_mode_greenluma(true);
+                app.settings.steam_last_mode_greenluma = true;
+            }
+        }
         // Launched via the "Send to" shortcut (or a file passed on the
         // command line) — start straight away instead of waiting for a drop.
         if let Some(path) = initial_path {
-            app.accept_path(path);
+            if open_greenluma {
+                app.accept_greenluma_path(path);
+            } else {
+                app.accept_path(path);
+            }
         }
         app
+    }
+
+    pub fn set_instance_guard(&mut self, guard: crate::single_instance::InstanceGuard) {
+        self.instance_guard = Some(guard);
     }
 
     fn ensure_tray(&mut self) {
@@ -452,9 +533,53 @@ impl GoldbergDropApp {
         }
         let games = games::load();
         match tray::TrayHandle::create(&games) {
-            Ok(handle) => self.tray = Some(handle),
+            Ok(handle) => {
+                Self::spawn_gl_download_watcher(self.tx.clone(), handle.wake.clone());
+                self.tray = Some(handle);
+            }
             Err(e) => eprintln!("Tray icon failed: {e:#}"),
         }
+    }
+
+    /// Poll Steam manifests off the UI thread — hidden tray windows often stop
+    /// getting egui timers, so download detection must not live only in `logic`.
+    fn spawn_gl_download_watcher(tx: Sender<WorkerMsg>, wake: std::sync::Arc<tray::TrayWake>) {
+        std::thread::spawn(move || {
+            let mut alerted = std::collections::HashSet::<u32>::new();
+            loop {
+                std::thread::sleep(Duration::from_secs(3));
+                let settings = AppSettings::load();
+                if !settings.steam_last_mode_greenluma || !greenluma::is_installed() {
+                    alerted.clear();
+                    continue;
+                }
+                if !greenluma::is_steam_running() {
+                    continue;
+                }
+                let hits = greenluma::scan_active_downloads(&settings);
+                let hit_ids: std::collections::HashSet<u32> =
+                    hits.iter().map(|(id, _)| *id).collect();
+                alerted.retain(|id| hit_ids.contains(id));
+
+                // Don't interrupt gameplay — wait until the game process exits.
+                if greenluma::is_game_session_active() {
+                    continue;
+                }
+
+                let mut fresh = Vec::new();
+                for (id, name) in hits {
+                    if alerted.insert(id) {
+                        fresh.push((id, name));
+                    }
+                }
+                if fresh.is_empty() {
+                    continue;
+                }
+                log::info!("GL download watch (bg): {fresh:?}");
+                let _ = tx.send(WorkerMsg::GlDownloadDetected { hits: fresh });
+                wake.show_window_now();
+            }
+        });
     }
 
     fn refresh_tray_menu(&mut self) {
@@ -519,10 +644,11 @@ impl GoldbergDropApp {
                 tray::TrayCmd::ShowWindow => self.show_from_tray(ctx),
                 tray::TrayCmd::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 tray::TrayCmd::LaunchGame(app_id) => {
+                    // Fallback — primary path launches on the tray menu thread.
                     let games = games::load();
                     if let Some(g) = games.iter().find(|g| g.app_id == app_id) {
                         if let Err(e) = tray::launch_game(&g.exe_path) {
-                            eprintln!("Launch failed: {e:#}");
+                            log::error!("Launch failed: {e:#}");
                         }
                     }
                 }
@@ -542,6 +668,26 @@ impl GoldbergDropApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             } else {
                 ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
+    }
+
+    fn poll_single_instance_ipc(&mut self, ctx: &egui::Context) {
+        let Some(cmd) = crate::single_instance::take_command() else {
+            return;
+        };
+        if cmd.show {
+            self.show_from_tray(ctx);
+        }
+        if cmd.greenluma {
+            self.active_tab = AppTab::GreenLuma;
+        }
+        if let Some(path) = cmd.path {
+            if cmd.greenluma {
+                self.accept_greenluma_path(path);
+            } else {
+                self.active_tab = AppTab::Setup;
+                self.accept_path(path);
             }
         }
     }
@@ -707,11 +853,15 @@ impl GoldbergDropApp {
         self.screen = Screen::Idle;
     }
 
-    fn poll_worker(&mut self) {
+    fn poll_worker(&mut self, ctx: &egui::Context) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 WorkerMsg::SearchFound(app) => {
-                    self.start_apply(app.app_id, app.name);
+                    if self.gl_lookup_mode {
+                        self.finish_gl_applist(app.app_id, app.name);
+                    } else {
+                        self.start_apply(app.app_id, app.name);
+                    }
                 }
                 WorkerMsg::SearchAmbiguous(list) => {
                     self.candidates = list;
@@ -719,15 +869,30 @@ impl GoldbergDropApp {
                     self.manual_id_error = None;
                     self.selected_match_name = None;
                     self.screen = Screen::ChooseMatch;
+                    if self.gl_lookup_mode {
+                        self.active_tab = AppTab::Setup; // reuse choose-match UI area
+                    }
                 }
                 WorkerMsg::SearchNotFound => {
                     self.manual_id_input.clear();
                     self.manual_id_error = None;
                     self.screen = Screen::ManualId;
+                    if self.gl_lookup_mode {
+                        self.active_tab = AppTab::Setup;
+                    }
                 }
                 WorkerMsg::SearchFailed(e) => {
-                    self.result_message = format!("Search failed: {e}");
-                    self.screen = Screen::Error;
+                    if self.gl_lookup_mode {
+                        self.gl_lookup_mode = false;
+                        self.gl_busy = false;
+                        self.gl_status = format!("Search failed: {e}");
+                        self.gl_status_error = true;
+                        self.active_tab = AppTab::GreenLuma;
+                        self.screen = Screen::Idle;
+                    } else {
+                        self.result_message = format!("Search failed: {e}");
+                        self.screen = Screen::Error;
+                    }
                 }
                 WorkerMsg::ApplyDone {
                     app_id,
@@ -839,6 +1004,37 @@ impl GoldbergDropApp {
                 WorkerMsg::SteamCmdEnsureDone { error } => {
                     self.on_steamcmd_ensure_done(error);
                 }
+                WorkerMsg::GreenLumaDone { message } => {
+                    log::info!("GreenLumaDone: {message}");
+                    self.gl_busy = false;
+                    let was = self.gl_installed;
+                    self.gl_installed = greenluma::is_installed();
+                    self.gl_status = message;
+                    self.gl_status_error = false;
+                    self.settings = AppSettings::load();
+                    self.active_tab = AppTab::GreenLuma;
+                    if was != self.gl_installed {
+                        self.refresh_tray_menu();
+                    }
+                }
+                WorkerMsg::GreenLumaFailed { error } => {
+                    log::error!("GreenLumaFailed: {error}");
+                    self.gl_busy = false;
+                    self.gl_status = error;
+                    self.gl_status_error = true;
+                    self.active_tab = AppTab::GreenLuma;
+                }
+                WorkerMsg::GlDownloadDetected { hits } => {
+                    if self.gl_download_overlay_suppress || self.gl_download_overlay_open {
+                        continue;
+                    }
+                    for (id, _) in &hits {
+                        self.gl_download_alerted.insert(*id);
+                    }
+                    self.gl_download_hits = hits;
+                    self.gl_download_overlay_open = true;
+                    self.show_from_tray(ctx);
+                }
             }
         }
     }
@@ -881,7 +1077,11 @@ impl GoldbergDropApp {
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if let Some(file) = dropped.first() {
             if let Some(path) = &file.path {
-                self.accept_path(path.clone());
+                if self.active_tab == AppTab::GreenLuma {
+                    self.accept_greenluma_path(path.clone());
+                } else if self.active_tab == AppTab::Setup {
+                    self.accept_path(path.clone());
+                }
             }
         }
     }
@@ -899,7 +1099,272 @@ impl GoldbergDropApp {
             return;
         }
 
+        self.gl_lookup_mode = false;
         self.start_search(path);
+    }
+
+    fn accept_greenluma_path(&mut self, path: PathBuf) {
+        if self.gl_busy {
+            log::debug!("accept_greenluma_path ignored (busy): {}", path.display());
+            return;
+        }
+        log::info!("accept_greenluma_path {}", path.display());
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        match ext.as_str() {
+            "exe" => {
+                if !self.gl_installed {
+                    self.gl_status = "Install GreenLuma first.".into();
+                    self.gl_status_error = true;
+                    return;
+                }
+                self.gl_lookup_mode = true;
+                self.gl_busy = true;
+                self.gl_status = "Looking up AppID…".into();
+                self.gl_status_error = false;
+                self.start_search(path);
+            }
+            "7z" | "zip" | "rar" => {
+                // Bundled GL pack vs CSF Steam-library pack
+                self.start_gl_archive(path);
+            }
+            _ => {
+                log::warn!("unsupported greenluma drop ext={ext}");
+                self.gl_status =
+                    "Drop a CSF archive (.7z/.zip) or a game .exe.".into();
+                self.gl_status_error = true;
+            }
+        }
+    }
+
+    fn finish_gl_applist(&mut self, app_id: u32, name: String) {
+        self.gl_lookup_mode = false;
+        self.gl_busy = false;
+        self.screen = Screen::Idle;
+        self.active_tab = AppTab::GreenLuma;
+        match greenluma::add_to_applist(app_id, &name, false) {
+            Ok(r) => {
+                self.gl_status = if r.added {
+                    if r.restarted {
+                        format!(
+                            "Added {name} ({app_id}) to AppList — restarted Steam with GreenLuma."
+                        )
+                    } else {
+                        format!("Added {name} ({app_id}) to AppList.")
+                    }
+                } else {
+                    format!("{name} ({app_id}) already in AppList.")
+                };
+                self.gl_status_error = false;
+            }
+            Err(e) => {
+                self.gl_status = format!("AppList write failed: {e:#}");
+                self.gl_status_error = true;
+            }
+        }
+    }
+
+    fn start_gl_archive(&mut self, path: PathBuf) {
+        self.gl_busy = true;
+        self.gl_status_error = false;
+        self.gl_status = "Reading archive…".into();
+
+        let mut passwords = greenluma::default_archive_passwords(&self.settings);
+        if !self.gl_archive_password.trim().is_empty() {
+            passwords.insert(0, self.gl_archive_password.trim().to_string());
+        }
+        let mut settings = self.settings.clone();
+        let tx = self.tx.clone();
+
+        std::thread::spawn(move || {
+            let msg = match archive::list_with_password_tries(&path, &passwords) {
+                Ok((paths, pw)) => {
+                    if archive::is_steam_library_layout(&paths) {
+                        if !greenluma::is_installed() {
+                            WorkerMsg::GreenLumaFailed {
+                                error: "Install GreenLuma before importing a CSF pack.".into(),
+                            }
+                        } else {
+                            match greenluma::import_csf_archive(&path, &mut settings, &[pw]) {
+                                Ok((info, add)) => {
+                                    let restart = if add.restarted {
+                                        if add.added {
+                                            " Steam restarted with GreenLuma."
+                                        } else {
+                                            " Already in AppList — Steam restarted with GreenLuma."
+                                        }
+                                    } else {
+                                        ""
+                                    };
+                                    WorkerMsg::GreenLumaDone {
+                                        message: format!(
+                                            "Imported {} ({}) → library + AppList.{}",
+                                            info.name, info.app_id, restart
+                                        ),
+                                    }
+                                }
+                                Err(e) => WorkerMsg::GreenLumaFailed {
+                                    error: format!("CSF import failed: {e:#}"),
+                                },
+                            }
+                        }
+                    } else if paths.iter().any(|p| {
+                        p.to_lowercase().contains("dllinjector.exe")
+                            || p.to_lowercase().contains("greenluma_2026")
+                    }) {
+                        match greenluma::install_from_archive(&path, &passwords) {
+                            Ok(used_pw) => {
+                                if !used_pw.is_empty()
+                                    && !settings.archive_passwords.iter().any(|p| p == &used_pw)
+                                {
+                                    settings.archive_passwords.push(used_pw);
+                                    let _ = settings.save();
+                                }
+                                WorkerMsg::GreenLumaDone {
+                                    message: format!(
+                                        "GreenLuma {} installed (SHA verified).",
+                                        greenluma::bundled_version()
+                                    ),
+                                }
+                            }
+                            Err(e) => WorkerMsg::GreenLumaFailed {
+                                error: format!("Install rejected: {e:#}"),
+                            },
+                        }
+                    } else {
+                        WorkerMsg::GreenLumaFailed {
+                            error: "Not a Steam library pack (need steamapps/appmanifest_*.acf) \
+                                    and not a GreenLuma installer archive."
+                                .into(),
+                        }
+                    }
+                }
+                Err(e) => WorkerMsg::GreenLumaFailed {
+                    error: format!("Could not open archive: {e:#}"),
+                },
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    fn start_gl_bundled_install(&mut self) {
+        self.gl_show_defender_warn = false;
+        self.gl_busy = true;
+        self.gl_status = "Extracting bundled GreenLuma…".into();
+        self.gl_status_error = false;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let msg = match greenluma::install_from_bundled() {
+                Ok(()) => WorkerMsg::GreenLumaDone {
+                    message: format!(
+                        "GreenLuma {} installed (SHA verified).",
+                        greenluma::bundled_version()
+                    ),
+                },
+                Err(e) => WorkerMsg::GreenLumaFailed {
+                    error: format!(
+                        "Install failed: {e:#}. Allow/exclude the install folder in Defender and retry."
+                    ),
+                },
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    fn on_gl_sendto_changed(&mut self) {
+        if self.gl_sendto_enabled {
+            match sendto::enable_greenluma() {
+                Ok(()) => {
+                    self.gl_sendto_stale = false;
+                    self.gl_sendto_notice = Some((
+                        "Right-click → Send to → GoldbergDrop (GreenLuma).".into(),
+                        false,
+                    ));
+                }
+                Err(e) => {
+                    self.gl_sendto_enabled = false;
+                    self.gl_sendto_notice =
+                        Some((format!("Couldn't enable Send to: {e}"), true));
+                }
+            }
+        } else {
+            match sendto::disable_greenluma() {
+                Ok(()) => {
+                    self.gl_sendto_stale = false;
+                    self.gl_sendto_notice = None;
+                }
+                Err(e) => {
+                    self.gl_sendto_notice =
+                        Some((format!("Couldn't disable Send to: {e}"), true));
+                }
+            }
+        }
+    }
+
+    fn refresh_gl_sendto(&mut self) {
+        match sendto::enable_greenluma() {
+            Ok(()) => {
+                self.gl_sendto_stale = false;
+                self.gl_sendto_enabled = true;
+                self.gl_sendto_notice = Some(("\"Send to\" (GreenLuma) is fixed.".into(), false));
+            }
+            Err(e) => {
+                self.gl_sendto_notice =
+                    Some((format!("Couldn't fix \"Send to\": {e}"), true));
+            }
+        }
+    }
+
+    fn set_greenluma_auto_inject(&mut self, enable: bool) {
+        if enable {
+            if !greenluma::is_installed() {
+                self.settings.greenluma_auto_inject = false;
+                self.gl_auto_inject_notice = Some((
+                    "Install GreenLuma first.".into(),
+                    true,
+                ));
+                return;
+            }
+            // Backup Steam Run, then remove it; ensure GBD tray Run is active.
+            if self.settings.steam_run_backup.is_none() {
+                self.settings.steam_run_backup = autostart::read_steam_run();
+            }
+            if let Err(e) = autostart::delete_steam_run() {
+                self.gl_auto_inject_notice =
+                    Some((format!("Couldn't disable Steam autostart: {e:#}"), true));
+                self.settings.greenluma_auto_inject = false;
+                return;
+            }
+            if let Err(e) = autostart::enable() {
+                self.gl_auto_inject_notice =
+                    Some((format!("Couldn't enable GoldbergDrop autostart: {e:#}"), true));
+                self.settings.greenluma_auto_inject = false;
+                return;
+            }
+            let _ = autostart::ensure_gbd_run_valid();
+            self.settings.autostart_tray = true;
+            self.settings.greenluma_auto_inject = true;
+            self.gl_auto_inject_notice =
+                Some(("Steam autostart replaced — GBD will inject Steam.".into(), false));
+        } else {
+            self.settings.greenluma_auto_inject = false;
+            if let Some(backup) = self.settings.steam_run_backup.take() {
+                if let Err(e) = autostart::write_steam_run(&backup) {
+                    self.gl_auto_inject_notice =
+                        Some((format!("Couldn't restore Steam autostart: {e:#}"), true));
+                } else {
+                    self.gl_auto_inject_notice =
+                        Some(("Steam autostart restored.".into(), false));
+                }
+            } else {
+                self.gl_auto_inject_notice =
+                    Some(("Auto-inject off (no Steam Run backup to restore).".into(), false));
+            }
+        }
+        self.persist_settings();
     }
 
     fn browse_for_exe(&mut self) {
@@ -909,6 +1374,16 @@ impl GoldbergDropApp {
             .pick_file()
         {
             self.accept_path(path);
+        }
+    }
+
+    fn browse_for_greenluma(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Archives / exe", &["7z", "zip", "rar", "exe"])
+            .set_title("Select CSF pack, GreenLuma archive, or game .exe")
+            .pick_file()
+        {
+            self.accept_greenluma_path(path);
         }
     }
 
@@ -1056,7 +1531,10 @@ impl GoldbergDropApp {
 
     /// Ctrl+V / paste into the WorkshopDL window → queue (when not typing a single URL).
     fn handle_workshop_window_paste(&mut self, ui: &mut egui::Ui) {
-        if self.import_list_overlay_open || self.failed_overlay_open {
+        if self.import_list_overlay_open
+            || self.failed_overlay_open
+            || self.gl_download_overlay_open
+        {
             return;
         }
 
@@ -1539,9 +2017,18 @@ impl eframe::App for GoldbergDropApp {
     /// Runs even when the window is hidden — tray + worker must live here, not
     /// only in `ui`, or tray-menu actions stall until the window is focused.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.poll_worker();
+        // Keep tray wake targets fresh so menu/click threads can revive a hidden window.
+        if let Some(tray) = &self.tray {
+            tray.wake.set_context(ctx);
+            if let Some(window) = frame.winit_window() {
+                tray.wake.set_hwnd_from_window(window);
+            }
+        }
+
+        self.poll_worker(ctx);
         self.poll_tray(ctx);
         self.poll_tray_banner(ctx);
+        self.poll_single_instance_ipc(ctx);
         self.enforce_tray_hidden(ctx, frame);
 
         if self.dormant_in_tray || self.tray.is_some() {
@@ -1551,6 +2038,8 @@ impl eframe::App for GoldbergDropApp {
         if self.screen == Screen::Working
             || self.queue_processing
             || self.queue_lookup_pending()
+            || self.gl_busy
+            || self.gl_download_overlay_open
         {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -1621,6 +2110,8 @@ impl eframe::App for GoldbergDropApp {
                         self.draw_import_list_overlay(ui, app_rect);
                     } else if self.failed_overlay_open {
                         self.draw_failed_overlay(ui, app_rect);
+                    } else if self.gl_download_overlay_open {
+                        self.draw_gl_download_overlay(ui, app_rect);
                     }
 
                     if self.tray_banner_until.is_some() {
@@ -2279,6 +2770,13 @@ impl GoldbergDropApp {
                             }
                             if self.ribbon_tab_button(
                                 ui,
+                                "GreenLuma",
+                                self.active_tab == AppTab::GreenLuma,
+                            ) {
+                                self.active_tab = AppTab::GreenLuma;
+                            }
+                            if self.ribbon_tab_button(
+                                ui,
                                 "WorkshopDL",
                                 self.active_tab == AppTab::WorkshopDl,
                             ) {
@@ -2326,7 +2824,213 @@ impl GoldbergDropApp {
         }
     }
 
+    fn draw_greenluma(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("GREENLUMA")
+                .color(colors::TEXT_MUTED)
+                .size(10.0),
+        );
+        ui.add_space(4.0);
+
+        if !self.gl_installed {
+            ui.label(
+                RichText::new(
+                    "Injector DLLs often false-positive in antivirus. Allow or exclude the \
+                     install folder before continuing.",
+                )
+                .color(colors::TEXT_MUTED)
+                .size(11.5),
+            );
+            ui.add_space(8.0);
+            if self.gl_show_defender_warn {
+                ui.label(
+                    RichText::new(
+                        "Install extracts to %LOCALAPPDATA%\\GoldbergDrop\\…\\greenluma\\ \
+                         and verifies SHA256 against pinned originals. Modified files are rejected.",
+                    )
+                    .color(colors::TEXT_PRIMARY)
+                    .size(11.5),
+                );
+                ui.add_space(8.0);
+                ui.columns(2, |columns| {
+                    if Self::primary_button(&mut columns[0], "Install now").clicked() && !self.gl_busy
+                    {
+                        self.start_gl_bundled_install();
+                    }
+                    if Self::secondary_button(&mut columns[1], "Cancel").clicked() {
+                        self.gl_show_defender_warn = false;
+                    }
+                });
+            } else {
+                ui.add_enabled_ui(!self.gl_busy, |ui| {
+                    if Self::primary_button(ui, "Install GreenLuma").clicked() {
+                        self.gl_show_defender_warn = true;
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Or drop / browse an original GreenLuma archive (SHA-checked).")
+                        .color(colors::TEXT_MUTED)
+                        .size(11.0),
+                );
+            }
+        } else {
+            ui.label(
+                RichText::new(format!(
+                    "Installed ({}) — drop a CSF Steam pack or game .exe.",
+                    greenluma::bundled_version()
+                ))
+                .color(colors::SUCCESS)
+                .size(12.0),
+            );
+        }
+
+        ui.add_space(10.0);
+
+        let is_hovering_file = !ctx.input(|i| i.raw.hovered_files.is_empty());
+        let frame = egui::Frame::new()
+            .fill(if is_hovering_file {
+                colors::ACCENT.linear_multiply(0.18)
+            } else {
+                colors::SURFACE
+            })
+            .stroke(Stroke::new(
+                1.0,
+                if is_hovering_file {
+                    colors::ACCENT
+                } else {
+                    colors::PANEL_BORDER
+                },
+            ))
+            .corner_radius(CornerRadius::same(CARD_RADIUS))
+            .inner_margin(egui::Margin::symmetric(16, 36));
+
+        frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Drop CSF archive or .exe")
+                            .color(colors::TEXT_PRIMARY)
+                            .size(13.5),
+                    )
+                    .selectable(false),
+                );
+                ui.add_space(8.0);
+                if Self::ghost_accent_button(ui, "Browse...").clicked() && !self.gl_busy {
+                    self.browse_for_greenluma();
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+        Self::field_label(ui, "ARCHIVE PASSWORD (OPTIONAL)");
+        Self::text_field(
+            ui,
+            &mut self.gl_archive_password,
+            "cs.rin.ru …",
+            ui.available_width(),
+        );
+
+        ui.add_space(8.0);
+        if ui
+            .checkbox(
+                &mut self.gl_sendto_enabled,
+                "\"Send to\" entry (GreenLuma)",
+            )
+            .changed()
+        {
+            self.on_gl_sendto_changed();
+        }
+        if self.gl_sendto_stale {
+            ui.add_space(4.0);
+            if Self::paint_button(
+                ui,
+                "Moved — Fix \"Send to\" (GreenLuma)",
+                colors::SURFACE,
+                colors::SURFACE_HOVER,
+                Stroke::new(1.0, colors::ERROR.linear_multiply(0.55)),
+                colors::ERROR,
+                CONTROL_HEIGHT,
+                ui.available_width(),
+                12.0,
+            )
+            .clicked()
+            {
+                self.refresh_gl_sendto();
+            }
+        }
+        if let Some((message, is_error)) = &self.gl_sendto_notice {
+            ui.add_space(4.0);
+            let color = if *is_error {
+                colors::ERROR
+            } else {
+                colors::TEXT_MUTED
+            };
+            ui.label(RichText::new(message.as_str()).color(color).size(11.5));
+        }
+
+        ui.add_space(10.0);
+        ui.add_enabled_ui(self.gl_installed && !self.gl_busy, |ui| {
+            if Self::primary_button(ui, "Start Steam with GreenLuma").clicked() {
+                match greenluma::start_steam_injected() {
+                    Ok(()) => {
+                        self.settings.steam_last_mode_greenluma =
+                            AppSettings::load().steam_last_mode_greenluma;
+                        self.gl_status = if greenluma::is_steam_running() {
+                            "Steam is already running.".into()
+                        } else {
+                            "Started DLLInjector → Steam.".into()
+                        };
+                        self.gl_status_error = false;
+                    }
+                    Err(e) => {
+                        self.gl_status = format!("Inject failed: {e:#}");
+                        self.gl_status_error = true;
+                    }
+                }
+            }
+        });
+
+        ui.add_space(10.0);
+        if self.gl_busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new(&self.gl_status).color(colors::TEXT_MUTED).size(12.0));
+            });
+        } else {
+            let color = if self.gl_status_error {
+                colors::ERROR
+            } else {
+                colors::TEXT_MUTED
+            };
+            ui.label(RichText::new(&self.gl_status).color(color).size(12.0));
+        }
+
+        if self.gl_installed {
+            let list = greenluma::read_applist();
+            if !list.is_empty() {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "AppList: {}",
+                        list.iter()
+                            .take(5)
+                            .map(|e| format!("{} ({})", e.name, e.app_id))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .color(colors::TEXT_MUTED)
+                    .size(11.0),
+                );
+            }
+        }
+    }
+
     fn draw_settings(&mut self, ui: &mut egui::Ui) {
+        if self.settings.autostart_tray || self.settings.greenluma_auto_inject {
+            let _ = autostart::ensure_gbd_run_valid();
+        }
         ui.label(
             RichText::new("SETTINGS")
                 .color(colors::TEXT_MUTED)
@@ -2484,6 +3188,41 @@ impl GoldbergDropApp {
                         dirty = true;
                     }
                 });
+                ui.add_space(14.0);
+                Self::field_label(ui, "STEAM.EXE");
+                let steam_text = match greenluma::detect_steam(&self.settings) {
+                    Ok(p) => p.steam_exe.display().to_string(),
+                    Err(_) => "(not detected — Browse to set)".into(),
+                };
+                ui.label(
+                    RichText::new(if let Some(ovr) = &self.settings.steam_exe_override {
+                        format!("{} (override)", ovr.display())
+                    } else {
+                        steam_text
+                    })
+                    .color(colors::TEXT_PRIMARY)
+                    .size(11.5),
+                );
+                ui.add_space(6.0);
+                ui.columns(2, |columns| {
+                    if Self::secondary_button(&mut columns[0], "Browse Steam…").clicked() {
+                        if let Some(file) = rfd::FileDialog::new()
+                            .add_filter("Steam", &["exe"])
+                            .set_title("Select Steam.exe")
+                            .pick_file()
+                        {
+                            self.settings.steam_exe_override = Some(file);
+                            dirty = true;
+                            let _ = greenluma::write_injector_ini();
+                        }
+                    }
+                    if Self::secondary_button(&mut columns[1], "Auto-detect").clicked() {
+                        self.settings.steam_exe_override = None;
+                        self.settings.steam_library_override = None;
+                        dirty = true;
+                        let _ = greenluma::write_injector_ini();
+                    }
+                });
             }
             SettingsTab::Setup => {
                 if ui
@@ -2534,14 +3273,16 @@ impl GoldbergDropApp {
                 {
                     self.settings.autostart_tray = autostart;
                     dirty = true;
-                    let result = if autostart {
+                    // Don't disable Run key while auto-inject needs it.
+                    let result = if autostart || self.settings.greenluma_auto_inject {
                         autostart::enable()
                     } else {
                         autostart::disable()
                     };
                     if let Err(e) = result {
-                        eprintln!("Autostart change failed: {e:#}");
+                        log::error!("Autostart change failed: {e:#}");
                     }
+                    let _ = autostart::ensure_gbd_run_valid();
                 }
                 ui.add_space(4.0);
                 ui.label(
@@ -2553,6 +3294,46 @@ impl GoldbergDropApp {
                     .color(colors::TEXT_MUTED)
                     .size(11.0),
                 );
+                ui.add_space(10.0);
+                Self::field_label(ui, "GREENLUMA");
+                let mut auto_inject = self.settings.greenluma_auto_inject;
+                let gl_ok = greenluma::is_installed();
+                ui.add_enabled_ui(gl_ok || auto_inject, |ui| {
+                    if ui
+                        .checkbox(
+                            &mut auto_inject,
+                            "Start Steam with GreenLuma when GoldbergDrop starts",
+                        )
+                        .changed()
+                    {
+                        self.set_greenluma_auto_inject(auto_inject);
+                        dirty = false; // already persisted inside setter
+                    }
+                });
+                if !gl_ok {
+                    ui.label(
+                        RichText::new("GreenLuma not installed — auto-inject unavailable.")
+                            .color(colors::TEXT_MUTED)
+                            .size(11.0),
+                    );
+                } else if self.settings.greenluma_auto_inject {
+                    ui.label(
+                        RichText::new("Steam Windows autostart replaced by GoldbergDrop.")
+                            .color(colors::TEXT_MUTED)
+                            .size(11.0),
+                    );
+                }
+                if let Some((msg, is_err)) = &self.gl_auto_inject_notice {
+                    ui.label(
+                        RichText::new(msg.as_str())
+                            .color(if *is_err {
+                                colors::ERROR
+                            } else {
+                                colors::SUCCESS
+                            })
+                            .size(11.0),
+                    );
+                }
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
@@ -2560,6 +3341,16 @@ impl GoldbergDropApp {
                     )
                     .color(colors::TEXT_MUTED)
                     .size(11.0),
+                );
+                ui.add_space(10.0);
+                Self::field_label(ui, "DEBUG LOG");
+                let log_text = crate::logging::log_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(unavailable)".into());
+                ui.label(
+                    RichText::new(log_text)
+                        .color(colors::TEXT_MUTED)
+                        .size(11.0),
                 );
                 ui.add_space(10.0);
                 Self::field_label(ui, "TRACKED GAMES");
@@ -2617,6 +3408,11 @@ impl GoldbergDropApp {
 
         if self.active_tab == AppTab::WorkshopDl {
             self.draw_workshop_dl(ui);
+            return;
+        }
+
+        if self.active_tab == AppTab::GreenLuma {
+            self.draw_greenluma(ctx, ui);
             return;
         }
 
@@ -2903,7 +3699,11 @@ impl GoldbergDropApp {
                             .flatten()
                             .unwrap_or_else(|| format!("App {app_id}")),
                     };
-                    self.start_apply(app_id, name);
+                    if self.gl_lookup_mode {
+                        self.finish_gl_applist(app_id, name);
+                    } else {
+                        self.start_apply(app_id, name);
+                    }
                 }
                 Err(_) => {
                     self.manual_id_error =
@@ -2911,7 +3711,14 @@ impl GoldbergDropApp {
                 }
             }
         } else if cancel_clicked {
-            self.reset();
+            if self.gl_lookup_mode {
+                self.gl_lookup_mode = false;
+                self.gl_busy = false;
+                self.active_tab = AppTab::GreenLuma;
+                self.screen = Screen::Idle;
+            } else {
+                self.reset();
+            }
         }
     }
 
@@ -2955,9 +3762,20 @@ impl GoldbergDropApp {
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| format!("App {app_id}"));
-            self.start_apply(app_id, name);
+            if self.gl_lookup_mode {
+                self.finish_gl_applist(app_id, name);
+            } else {
+                self.start_apply(app_id, name);
+            }
         } else if cancelled {
-            self.reset();
+            if self.gl_lookup_mode {
+                self.gl_lookup_mode = false;
+                self.gl_busy = false;
+                self.active_tab = AppTab::GreenLuma;
+                self.screen = Screen::Idle;
+            } else {
+                self.reset();
+            }
         }
     }
 
@@ -3490,6 +4308,105 @@ impl GoldbergDropApp {
             self.retry_failed_with_steamcmd();
         } else if dismiss || backdrop.clicked() {
             self.dismiss_failed_overlay();
+        }
+    }
+
+    fn draw_gl_download_overlay(&mut self, ui: &mut egui::Ui, app_rect: egui::Rect) {
+        let backdrop = ui.interact(
+            app_rect,
+            egui::Id::new("gl_download_overlay_backdrop"),
+            egui::Sense::click(),
+        );
+        ui.painter().rect_filled(
+            app_rect,
+            CornerRadius::same(WINDOW_CORNER_RADIUS),
+            Color32::from_black_alpha(180),
+        );
+
+        let card_width = 420.0;
+        let list_lines = self.gl_download_hits.len().clamp(1, 6) as f32;
+        let card_height = 28.0 + 40.0 + list_lines * 18.0 + 12.0 + CONTROL_HEIGHT * 2.0 + 36.0;
+        let card_rect = egui::Rect::from_center_size(
+            app_rect.center(),
+            egui::vec2(card_width, card_height),
+        );
+
+        let mut dismiss = false;
+        let mut suppress = false;
+        let mut start_plain = false;
+        egui::Area::new(egui::Id::new("gl_download_overlay_card"))
+            .fixed_pos(card_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(colors::PANEL_BG)
+                    .stroke(Stroke::new(1.0, colors::ACCENT.linear_multiply(0.55)))
+                    .corner_radius(CornerRadius::same(CARD_RADIUS))
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(card_width - 24.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Download while GreenLuma is active")
+                                    .color(colors::TEXT_PRIMARY)
+                                    .size(12.0),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if Self::icon_button(ui, "✕", colors::TEXT_MUTED).clicked() {
+                                        dismiss = true;
+                                    }
+                                },
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(
+                                "Steam is downloading under GreenLuma. Updates often fail — restart without GreenLuma to finish, then start with GreenLuma again to play.",
+                            )
+                            .color(colors::TEXT_MUTED)
+                            .size(11.0),
+                        );
+                        ui.add_space(8.0);
+                        for (id, name) in &self.gl_download_hits {
+                            ui.label(
+                                RichText::new(format!("• {name} ({id})"))
+                                    .color(colors::TEXT_PRIMARY)
+                                    .size(11.5),
+                            );
+                        }
+                        ui.add_space(12.0);
+                        if Self::primary_button(ui, "Start Steam without GreenLuma").clicked() {
+                            start_plain = true;
+                        }
+                        ui.add_space(6.0);
+                        if Self::secondary_button(ui, "Don't ask again this session").clicked() {
+                            suppress = true;
+                        }
+                    });
+            });
+
+        if start_plain {
+            self.gl_download_overlay_open = false;
+            match greenluma::start_steam_plain() {
+                Ok(()) => {
+                    self.settings.steam_last_mode_greenluma = false;
+                    self.gl_status = "Restarted Steam without GreenLuma.".into();
+                    self.gl_status_error = false;
+                }
+                Err(e) => {
+                    self.gl_status = format!("Plain Steam start failed: {e:#}");
+                    self.gl_status_error = true;
+                    self.active_tab = AppTab::GreenLuma;
+                }
+            }
+        } else if suppress {
+            self.gl_download_overlay_open = false;
+            self.gl_download_overlay_suppress = true;
+        } else if dismiss || backdrop.clicked() {
+            self.gl_download_overlay_open = false;
         }
     }
 

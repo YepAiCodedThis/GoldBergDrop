@@ -29,6 +29,18 @@ pub struct AppSettings {
     pub close_to_tray: bool,
     /// Start with Windows, minimized to tray (`--tray`).
     pub autostart_tray: bool,
+    /// Override auto-detected Steam.exe (`None` = always re-detect).
+    pub steam_exe_override: Option<PathBuf>,
+    /// Override Steam library root for CSF merge (`None` = primary library).
+    pub steam_library_override: Option<PathBuf>,
+    /// Remembered archive passwords (CSF / packs); seeded at runtime with cs.rin.ru.
+    pub archive_passwords: Vec<String>,
+    /// On GoldbergDrop start, launch Steam via GreenLuma DLLInjector.
+    pub greenluma_auto_inject: bool,
+    /// Previous `HKCU\...\Run\Steam` value, restored when auto-inject is turned off.
+    pub steam_run_backup: Option<String>,
+    /// Last Steam launch via GBD used GreenLuma inject (`true`) or plain Steam (`false`).
+    pub steam_last_mode_greenluma: bool,
 }
 
 impl Default for AppSettings {
@@ -42,6 +54,12 @@ impl Default for AppSettings {
             fetch_achievements_default: true,
             close_to_tray: true,
             autostart_tray: false,
+            steam_exe_override: None,
+            steam_library_override: None,
+            archive_passwords: Vec::new(),
+            greenluma_auto_inject: false,
+            steam_run_backup: None,
+            steam_last_mode_greenluma: false,
         }
     }
 }

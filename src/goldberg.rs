@@ -169,9 +169,12 @@ fn swap_dll(game_dir: &Path, goldberg_cache_dir: &Path, name: &str) -> Result<()
 /// failures are ignored since this is a cosmetic detail of the backup file.
 #[cfg(windows)]
 fn set_hidden(path: &Path) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new("attrib")
         .arg("+h")
         .arg(path)
+        .creation_flags(CREATE_NO_WINDOW)
         .status();
 }
 
