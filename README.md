@@ -4,6 +4,27 @@
 
 <h1 align="center">GoldbergDrop</h1>
 
+<table align="center" width="100%">
+  <tr>
+    <td align="center">
+      <br />
+      There’s a novel under this line. I won’t cry if you bounce.<br /><br />
+      <a href="https://yepaicodedthis.github.io/GoldBergDrop/"><strong>Website</strong></a>
+      = short version.
+      <a href="../../releases/latest"><strong>Exe</strong></a>
+      = skip the talking.<br /><br />
+      I built this so the boring setup just runs.
+      Hand-editing config files got annoying.<br /><br />
+      And yes, this was built with AI — thanks
+      <a href="https://cursor.com"><strong>Cursor</strong></a> team.
+      I can’t code, and you made this possible.
+      <br /><br />
+    </td>
+  </tr>
+</table>
+
+---
+
 <p align="center">
   Drop a game <code>.exe</code> → find the Steam App ID → set up<br>
   the <a href="https://mr_goldberg.gitlab.io/goldberg_emulator/">Goldberg Steamworks emulator</a>. No manual config editing.
@@ -22,45 +43,74 @@
 
 ---
 
+## Contents
+
+- [What it does](#what-it-does)
+- [Why](#why)
+- [Features](#features)
+- [Download](#download)
+- [Usage](#usage)
+  - [Goldberg setup](#goldberg-setup)
+  - [GreenLuma](#greenluma)
+  - [Tray](#tray--launching-games)
+  - [WorkshopDL](#workshopdl)
+  - [Settings](#settings)
+- [Build](#building-from-source)
+
+---
+
 ## What it does
 
-1. **Drop** a game `.exe` (or Browse… / Explorer **Send to → GoldbergDrop**).
-2. **Look up** the Steam App ID (exe name → folder → path). Pick from a list if needed, or type the ID.
+1. **Drop** a game `.exe`  
+   (or Browse… / Explorer **Send to → GoldbergDrop**)
+2. **Look up** the Steam App ID  
+   (exe name → folder → path). Pick from a list, or type the ID.
 3. **Apply Goldberg** in the game folder:
    - `steam_appid.txt`
-   - `steam_settings/` (optional DLC list + achievements)
-   - replace `steam_api.dll` / `steam_api64.dll` (searches subfolders too)
+   - `steam_settings/` (optional DLC + achievements)
+   - replace `steam_api.dll` / `steam_api64.dll` (subfolders too)
 
-Games you set up also appear in the **tray launcher** for one-click start.
+Set-up games also land in the **tray launcher**.
+
+---
 
 ## Why
 
-Goldberg is an offline Steamworks reimplementation. Useful when you want to:
+Goldberg = offline Steamworks reimplementation.
 
-- play without Steam running
-- keep a game working after store/server shutdown
-- LAN-test while modding
+| You want… | It helps |
+| --- | --- |
+| Play without Steam running | ✓ |
+| Keep a game alive after store/server death | ✓ |
+| LAN-test while modding | ✓ |
 
-GoldbergDrop only automates setup — it never ships game files.
+GoldbergDrop only automates setup. **No game files in the download.**
+
+---
 
 ## Features
 
 | Area | What you get |
 | --- | --- |
-| **Setup** | Drag & drop, Browse, Send to, CLI path · App ID lookup · DLC / achievements · recursive DLL swap |
-| **GreenLuma** | Install Steam006 (PW zip + SHA256) · CSF library import · AppList · inject / plain Steam · download watch |
-| **WorkshopDL** | Queue downloads via [GGNetwork](https://ggntw.com/steam) · SteamCMD fallback · bulk paste / list import |
-| **Tray** | Launch tracked games · Steam with / without GreenLuma · close-to-tray · autostart · auto-inject |
-| **Settings** | Providers, SteamCMD, Steam paths, Setup defaults, tray / auto-inject |
+| **Setup** | Drag & drop · Browse · Send to · CLI path · App ID lookup · DLC / achievements · recursive DLL swap |
+| **GreenLuma** | Install Steam006 (PW zip + SHA256) · CSF import · AppList · inject / plain Steam · download watch |
+| **WorkshopDL** | Queue via [GGNetwork](https://ggntw.com/steam) · SteamCMD fallback · bulk paste / list import |
+| **Tray** | Launch tracked games · Steam ± GreenLuma · close-to-tray · autostart · auto-inject |
+| **Settings** | Providers · SteamCMD · Steam paths · Setup defaults · tray / auto-inject |
+
+---
 
 ## Download
 
-- Get `goldberg-drop.exe` from **[Releases](../../releases)**
-- Single portable file — no installer, no API key
-- Needs internet for lookups, optional DLC/Workshop, and the one-time Goldberg download (then cached)
-- **[7-Zip](https://www.7-zip.org/) must be installed** for GreenLuma install and CSF pack import (`7z.exe` in Program Files or on PATH)
+| | |
+| --- | --- |
+| **Website** | [yepaicodedthis.github.io/GoldBergDrop](https://yepaicodedthis.github.io/GoldBergDrop/) |
+| **File** | `goldberg-drop.exe` from **[Releases](../../releases/latest)** |
+| **Shape** | Portable · no installer · no API key |
+| **Network** | Lookups · optional DLC/Workshop · one-time Goldberg fetch (then cached) |
+| **7-Zip** | **Required** for GreenLuma install + CSF packs ([download](https://www.7-zip.org/)) |
 
-> SmartScreen may warn (unsigned) → **More info → Run anyway**
+> **SmartScreen** may warn (unsigned) → **More info → Run anyway**
 
 ---
 
@@ -71,93 +121,131 @@ GoldbergDrop only automates setup — it never ships game files.
 | Screen | Action |
 | --- | --- |
 | Idle | Drop a `.exe` or **Browse…** |
-| Multiple matches | Pick a game or edit the App ID → **Apply** |
-| No match | Enter the App ID manually |
+| Multiple matches | Pick a game or edit App ID → **Apply** |
+| No match | Enter App ID manually |
 | Done | **Set up another game** if you want |
 
-Enable **"Send to" entry** once on the Setup tab to add GoldbergDrop to Explorer’s Send to menu.
+Enable **"Send to" entry** once on the Setup tab for Explorer’s Send to menu.
+
+---
 
 ### GreenLuma
 
-Alternative to Goldberg: run Steam with [GreenLuma](https://cs.rin.ru/) (Steam006) via DLLInjector (stealth any-folder).
+Alternative path: Steam + [GreenLuma](https://cs.rin.ru/forum/viewtopic.php?f=10&t=103709) (Steam006) via DLLInjector.
 
-**Requires [7-Zip](https://www.7-zip.org/)** — without `7z.exe`, GreenLuma install and CSF archive import will fail.
+**Needs [7-Zip](https://www.7-zip.org/).** No `7z.exe` → install / CSF import fail.
 
-1. Open the **GreenLuma** ribbon tab → **Install GreenLuma** (allow/exclude the `greenluma` folder under AppData in Defender first — injector DLLs often false-positive).
-2. Bundled archive is password-protected and **SHA256-whitelisted**; modified binaries are rejected.
-3. Drop a CSF / Orb-style pack (`steamapps/appmanifest_*.acf` + `steamapps/common/<installdir>/` + `depotcache/`) to merge into your Steam library and AppList. Optional archive password field (remembers working passwords; tries `cs.rin.ru`).
-4. Or drop a game `.exe` to look up the AppID and add it to AppList.
-5. **Start Steam with GreenLuma** launches `DLLInjector.exe`.
+#### Install & packs
 
-Optional **"Send to" entry (GreenLuma)** creates `GoldbergDrop (GreenLuma).lnk` (`--greenluma`).
+1. **GreenLuma** ribbon tab → **Install GreenLuma**  
+   Exclude AppData `greenluma` in Defender first (injector false-positives).
+2. Bundled archive is password-protected + **SHA256-whitelisted** — modified binaries are rejected.
+3. Drop a CSF / Orb pack to merge into Steam + AppList:
+   - `steamapps/appmanifest_*.acf`
+   - `steamapps/common/<installdir>/`
+   - `depotcache/`
+4. Optional archive password field (remembers working ones; tries `cs.rin.ru`).
+5. Or drop a game `.exe` → AppID → AppList.
+6. **Start Steam with GreenLuma** → runs `DLLInjector.exe`.
 
-Under **Settings → Tray**: **Start Steam with GreenLuma when GoldbergDrop starts** replaces Steam’s Windows Run autostart with GoldbergDrop (`--tray`), then injects Steam on each GBD launch. Unchecking restores the previous Steam Run entry.
+#### Extra hooks
 
-Steam path is auto-detected (registry → common paths); override under **Settings → Paths**.
+- **"Send to" (GreenLuma)** → `GoldbergDrop (GreenLuma).lnk` (`--greenluma`)
+- **Settings → Tray → Start Steam with GreenLuma when GoldbergDrop starts**  
+  Swaps Steam’s Run-key for GoldbergDrop (`--tray`), injects on each launch.  
+  Uncheck to restore the old Steam Run entry.
+- Steam path: auto (registry → common paths), override under **Settings → Paths**
 
-#### Play mode vs update mode
+#### Play vs maintain
 
-GreenLuma is great for playing unlocked AppList games; Steam updates/downloads often fail while injected.
+GreenLuma is great for AppList play. Updates/downloads often break while injected.
 
-| Mode | How | Use for |
+| Mode | How | For |
 | --- | --- | --- |
-| **Play (GreenLuma)** | Tray → *Start Steam with GreenLuma*, or auto-inject | Playing AppList games |
-| **Maintain (plain)** | Tray → *Start Steam without GreenLuma* | Updates, Workshop, Verify, Store |
+| **Play** | Tray → *Start Steam with GreenLuma* (or auto-inject) | Playing AppList games |
+| **Maintain** | Tray → *Start Steam without GreenLuma* | Updates · Workshop · Verify · Store |
 
-If Steam starts a download/update while the last launch was GreenLuma, GoldbergDrop prompts to restart **without** GreenLuma. The prompt waits until you **quit the game** so it does not interrupt play.
+If a download starts after a GreenLuma launch, GoldbergDrop asks to restart **plain Steam**.  
+The prompt waits until you **quit the game** — no mid-session nag.
+
+---
 
 ### Tray & launching games
 
-After a **successful Goldberg setup**, the game is tracked automatically (path + icon).
+After a successful Goldberg setup, the game is tracked (path + icon).
 
 | Action | Result |
 | --- | --- |
-| **Right-click** tray icon → game name | Starts that game’s `.exe` |
-| **Right-click** → Start Steam with / without GreenLuma | Restarts Steam in that mode (when GreenLuma is installed) |
-| **Right-click** → Open GoldbergDrop | Shows the main window |
-| **Right-click** → Quit | Exits the app |
-| **Left-click** tray icon | Only restores the window (does not launch a game) |
+| Right-click → game name | Starts that `.exe` |
+| Right-click → Steam with / without GreenLuma | Restarts Steam in that mode |
+| Right-click → Open GoldbergDrop | Shows the window |
+| Right-click → Quit | Exits |
+| Left-click tray | Restores window only (no launch) |
 
-- Remove games under **Settings → Tray**
-- **Close to tray**: ✕ hides to the notification area instead of quitting
-- **Autostart**: starts hidden with `--tray` at Windows logon
-- **Single instance**: a second launch (or Send to) forwards to the running app
+Extras under **Settings → Tray**:
+
+- Remove tracked games
+- **Close to tray** — ✕ hides instead of quit
+- **Autostart** — hidden with `--tray` at logon
+- **Single instance** — second launch / Send to forwards to the running app
+
+---
 
 ### WorkshopDL
 
-1. Paste Workshop URLs or IDs (or use **List** for many).
-2. **Add to Queue** / **Direct Download**.
-3. Run **Download Queue**.
+1. Paste Workshop URLs or IDs (or **List** for many)
+2. **Add to Queue** / **Direct Download**
+3. **Download Queue**
 
-GGNetwork is tried first; SteamCMD is the fallback.  
-Files go to `WorkshopDownloads/{Game}/` next to the exe (change under Settings → Paths).
+GGNetwork first, SteamCMD as fallback.  
+Default output: `WorkshopDownloads/{Game}/` next to the exe  
+(change under **Settings → Paths**).
+
+---
 
 ### Settings
 
-Open **⚙** on the ribbon:
+Ribbon **⚙**:
 
-**Download** · **SteamCMD** · **Paths** · **Setup** · **Tray**
+| Tab | |
+| --- | --- |
+| Download | Providers |
+| SteamCMD | SteamCMD setup |
+| Paths | Steam / output folders |
+| Setup | Setup defaults |
+| Tray | Launcher / autostart / auto-inject |
 
-Config, GreenLuma install, and cache live in:
+Data directory:
 
-`%APPDATA%\GoldbergDrop\GoldbergDrop\data\`
+```text
+%APPDATA%\GoldbergDrop\GoldbergDrop\data\
+```
 
 ---
 
 ## Building from source
 
-Requires a recent stable [Rust](https://www.rust-lang.org/) toolchain (MSVC) on Windows.
+Recent stable [Rust](https://www.rust-lang.org/) + MSVC on Windows:
 
 ```bash
 cargo build --release
 ```
 
-Output: `target/release/goldberg-drop.exe`
+→ `target/release/goldberg-drop.exe`
+
+---
 
 ## Built with
 
-[egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui) · [tray-icon](https://github.com/tauri-apps/tray-icon) · [Goldberg Emulator](https://mr_goldberg.gitlab.io/goldberg_emulator/) · see `Cargo.toml`
+[egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui)
+· [tray-icon](https://github.com/tauri-apps/tray-icon)
+· [Goldberg Emulator](https://mr_goldberg.gitlab.io/goldberg_emulator/)
+· see `Cargo.toml`
+
+---
 
 ## Disclaimer
 
-Setup helper for Goldberg / GreenLuma tooling — use with games you own. Goldberg and GreenLuma are third-party projects; GreenLuma binaries ship unmodified in a password-protected archive for integrity checks only. See their respective communities for licensing and terms.
+Setup helper for Goldberg / GreenLuma — use with games you own.  
+Both are third-party projects. GreenLuma binaries ship unmodified in a password-protected archive for integrity checks only.  
+See their communities for licensing and terms.

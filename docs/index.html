@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GoldbergDrop</title>
+    <meta
+      name="description"
+      content="Drop a game exe, find the Steam ID, set up offline play. Optional Workshop and GreenLuma."
+    />
+    <meta name="theme-color" content="#09090b" />
+    <link rel="icon" href="assets/app_icon_128.png" type="image/png" />
+    <style>
+      /*
+        Color theory (brand gold ≈ H 40°):
+        - Analogous warm: gold → amber hover → deep active
+        - Complementary cool (~220°): secondary buttons + calm accents
+        - Neutrals: warm-leaning darks so gold sits in-family, not neon on cold gray
+        - Hierarchy: warm = primary action, cool = secondary, mute = chrome
+      */
+      :root {
+        --hue-warm: 40;
+        --hue-cool: 218;
+
+        --gold: hsl(var(--hue-warm), 74%, 56%);
+        --gold-hi: hsl(var(--hue-warm), 78%, 64%);
+        --gold-deep: hsl(var(--hue-warm), 70%, 44%);
+        --gold-ink: hsl(var(--hue-warm), 42%, 10%);
+        --gold-soft: hsla(var(--hue-warm), 74%, 56%, 0.16);
+        --gold-ring: hsla(var(--hue-warm), 74%, 56%, 0.45);
+
+        --cool: hsl(var(--hue-cool), 62%, 62%);
+        --cool-hi: hsl(var(--hue-cool), 70%, 72%);
+        --cool-deep: hsl(var(--hue-cool), 48%, 42%);
+        --cool-soft: hsla(var(--hue-cool), 50%, 55%, 0.14);
+        --cool-line: hsla(var(--hue-cool), 40%, 60%, 0.45);
+
+        --bg: hsl(240, 8%, 4%);
+        --elev: hsl(240, 7%, 7%);
+        --surface: hsl(240, 6%, 10%);
+        --line: hsl(240, 5%, 18%);
+        --text: hsl(40, 12%, 96%);
+        --muted: hsl(240, 5%, 64%);
+        --nav-h: 64px;
+        /* One content rail for the whole page (use inside padded sections) */
+        --page-pad-x: clamp(1rem, 3vw, 2rem);
+        --content: 1200px;
+        --rail: min(var(--content), 100%);
+      }
+      * { box-sizing: border-box; }
+      html {
+        scroll-behavior: auto;
+        scroll-snap-type: y mandatory;
+      }
+      @media (max-width: 720px) {
+        html { scroll-snap-type: y proximity; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-snap-type: none; }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.55 "Segoe UI", system-ui, sans-serif;
+      }
+      img { display: block; max-width: 100%; }
+      a { color: var(--gold-hi); }
+      a:hover { color: var(--gold); }
+
+      .nav {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 40;
+        height: var(--nav-h);
+        padding: 0.7rem var(--page-pad-x) 0;
+        pointer-events: none;
+        background: transparent;
+        border: 0;
+        transition: padding 0.2s ease;
+      }
+      .nav-inner {
+        pointer-events: auto;
+        width: var(--rail);
+        height: 48px;
+        margin-inline: auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        padding: 0 0.55rem 0 0.75rem;
+        border-radius: 14px;
+        border: 1px solid transparent;
+        background: transparent;
+        backdrop-filter: blur(0);
+        transition:
+          background 0.2s ease,
+          border-color 0.2s ease,
+          box-shadow 0.2s ease,
+          backdrop-filter 0.2s ease;
+      }
+      .nav.is-solid .nav-inner {
+        background: hsla(240, 8%, 5%, 0.72);
+        border-color: hsla(var(--hue-warm), 40%, 50%, 0.18);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        color: var(--text);
+        text-decoration: none;
+        font-weight: 750;
+        font-size: 0.95rem;
+      }
+      .brand:hover { color: var(--text); }
+      .brand img { width: 24px; height: 24px; border-radius: 5px; }
+      .nav-right {
+        display: flex;
+        gap: 0.45rem;
+        align-items: center;
+        min-width: 0;
+      }
+      .nav-pages {
+        display: flex;
+        align-items: center;
+        gap: 0.15rem;
+        padding: 0.2rem;
+        border-radius: 10px;
+        background: hsla(240, 5%, 100%, 0.04);
+        border: 1px solid hsla(240, 5%, 100%, 0.06);
+      }
+      .nav-pages a {
+        position: relative;
+        color: var(--muted);
+        text-decoration: none;
+        font-weight: 650;
+        font-size: 0.78rem;
+        padding: 0.35rem 0.55rem;
+        border-radius: 8px;
+        white-space: nowrap;
+        transition: color 0.15s ease, background 0.15s ease;
+      }
+      .nav-pages a:hover {
+        color: var(--text);
+        background: hsla(240, 5%, 100%, 0.06);
+      }
+      .nav-pages a[aria-current="true"] {
+        color: var(--gold-ink);
+        background: var(--gold);
+        box-shadow: 0 0 0 1px var(--gold-deep);
+      }
+      .nav-pages a .n {
+        display: none;
+        font-variant-numeric: tabular-nums;
+      }
+      .nav-right > .btn {
+        color: var(--gold-ink);
+        min-height: 2.1rem;
+        padding: 0.35rem 0.85rem;
+        font-size: 0.84rem;
+        flex: 0 0 auto;
+      }
+      .nav-right > .btn:hover {
+        color: var(--gold-ink);
+        background:
+          linear-gradient(180deg, hsl(40, 82%, 70%) 0%, var(--gold-hi) 45%, var(--gold) 100%);
+      }
+
+      /* Primary = warm (attention / convert). Secondary = cool complement (balance). */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        min-height: 2.5rem;
+        padding: 0.55rem 1.1rem;
+        border-radius: 8px;
+        border: 1px solid var(--gold-deep);
+        background:
+          linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 48%, var(--gold-deep) 100%);
+        color: var(--gold-ink);
+        font-weight: 750;
+        font-size: 0.92rem;
+        text-decoration: none;
+        box-shadow:
+          0 1px 0 hsla(40, 80%, 80%, 0.35) inset,
+          0 8px 22px hsla(var(--hue-warm), 70%, 30%, 0.35);
+        transition:
+          background 0.15s ease,
+          border-color 0.15s ease,
+          box-shadow 0.15s ease,
+          transform 0.15s ease;
+      }
+      .btn:hover {
+        color: var(--gold-ink);
+        border-color: var(--gold);
+        background:
+          linear-gradient(180deg, hsl(40, 82%, 70%) 0%, var(--gold-hi) 45%, var(--gold) 100%);
+        box-shadow:
+          0 1px 0 hsla(40, 90%, 85%, 0.45) inset,
+          0 10px 28px hsla(var(--hue-warm), 75%, 35%, 0.45);
+        transform: translateY(-1px);
+      }
+      .btn:active {
+        transform: translateY(0);
+        background: var(--gold-deep);
+        border-color: hsl(var(--hue-warm), 65%, 36%);
+        box-shadow: 0 2px 8px hsla(var(--hue-warm), 60%, 20%, 0.4);
+      }
+      .btn:focus-visible {
+        outline: 2px solid var(--gold-hi);
+        outline-offset: 3px;
+      }
+
+      .btn-ghost {
+        border: 1px solid var(--cool-line);
+        background: var(--cool-soft);
+        color: var(--cool-hi);
+        box-shadow: none;
+      }
+      .btn-ghost:hover {
+        color: #fff;
+        border-color: var(--cool);
+        background: hsla(var(--hue-cool), 55%, 50%, 0.22);
+        box-shadow: 0 8px 22px hsla(var(--hue-cool), 50%, 30%, 0.25);
+        transform: translateY(-1px);
+      }
+      .btn-ghost:active {
+        background: hsla(var(--hue-cool), 45%, 40%, 0.28);
+        border-color: var(--cool-deep);
+        transform: translateY(0);
+        box-shadow: none;
+      }
+      .btn-ghost:focus-visible {
+        outline: 2px solid var(--cool);
+        outline-offset: 3px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .btn, .btn-ghost { transition: none; }
+        .btn:hover, .btn-ghost:hover { transform: none; }
+      }
+
+      /*
+        Hero = one scene: open copy left, large fan right (overlap, shared glow).
+        No glass card — that split the composition into two widgets.
+      */
+      .hero {
+        position: relative;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        align-items: center;
+        padding:
+          calc(var(--nav-h) + clamp(1.5rem, 5vh, 3rem))
+          var(--page-pad-x)
+          clamp(3.5rem, 8vh, 5rem);
+        background:
+          radial-gradient(48% 55% at 72% 48%, hsla(var(--hue-warm), 70%, 45%, 0.18), transparent 68%),
+          var(--bg);
+        overflow: hidden;
+        border-bottom: 1px solid var(--line);
+      }
+      .hero-inner {
+        position: relative;
+        z-index: 2;
+        width: var(--rail);
+        margin-inline: auto;
+        display: grid;
+        grid-template-columns: minmax(260px, 0.82fr) minmax(0, 1.35fr);
+        gap: clamp(1rem, 2.5vw, 2rem);
+        align-items: center;
+        min-height: calc(100dvh - var(--nav-h) - 6.5rem);
+      }
+      .hero-copy {
+        position: relative;
+        z-index: 3;
+        padding: 0;
+        border: 0;
+        background: none;
+        box-shadow: none;
+        max-width: 28rem;
+      }
+      .hero-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        margin: 0 0 0.85rem;
+        color: var(--gold);
+        font-size: 0.95rem;
+        font-weight: 750;
+        letter-spacing: 0.01em;
+      }
+      .hero-brand img {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+      }
+      /* Fan fills the free column; card size tracks width + height */
+      .fan {
+        --w: clamp(168px, min(38cqi, 54cqh), 290px);
+        --spread: clamp(58px, min(15cqi, 20cqh), 125px);
+        container-type: size;
+        position: relative;
+        width: 100%;
+        min-width: 0;
+        height: min(580px, calc(100dvh - var(--nav-h) - 6.5rem));
+        min-height: 300px;
+        justify-self: stretch;
+        pointer-events: none;
+        user-select: none;
+      }
+      @supports not (width: 1cqi) {
+        .fan {
+          --w: clamp(180px, 22vw, 270px);
+          --spread: clamp(64px, 9vw, 115px);
+        }
+      }
+      .fan::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 52%;
+        width: 90%;
+        height: 75%;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(circle, hsla(var(--hue-warm), 75%, 50%, 0.28), transparent 72%);
+        filter: blur(12px);
+        z-index: 0;
+      }
+      .fan figure {
+        margin: 0;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: var(--w);
+        border: 1px solid hsla(40, 30%, 70%, 0.16);
+        border-radius: clamp(10px, 1.2vw, 14px);
+        overflow: hidden;
+        background: transparent;
+        box-shadow:
+          0 24px 52px rgba(0, 0, 0, 0.55),
+          0 0 0 1px hsla(0, 0%, 100%, 0.04) inset;
+        transform: translate(-50%, -50%) rotate(var(--r)) translateY(var(--y)) scale(var(--s, 1));
+        animation: fan-in 0.7s ease both;
+        animation-delay: var(--d, 0s);
+      }
+      /* 1st card (main) = left start of the fan */
+      .fan figure:nth-child(1) {
+        --r: -18deg; --y: 8%; --s: 1; --d: 0.05s; z-index: 4;
+        margin-left: calc(var(--spread) * -1.5);
+      }
+      .fan figure:nth-child(2) {
+        --r: -6deg; --y: 1.5%; --s: 0.96; --d: 0.12s; z-index: 3;
+        margin-left: calc(var(--spread) * -0.5);
+      }
+      .fan figure:nth-child(3) {
+        --r: 6deg; --y: 1.5%; --s: 0.93; --d: 0.18s; z-index: 2;
+        margin-left: calc(var(--spread) * 0.5);
+      }
+      .fan figure:nth-child(4) {
+        --r: 18deg; --y: 8%; --s: 0.9; --d: 0.24s; z-index: 1;
+        margin-left: calc(var(--spread) * 1.5);
+      }
+      .fan img {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1;
+        object-fit: contain;
+        display: block;
+        background: transparent;
+      }
+      @keyframes fan-in {
+        from { opacity: 0; transform: translate(-50%, -46%) rotate(var(--r)) translateY(calc(var(--y) + 12px)) scale(calc(var(--s, 1) * 0.96)); }
+        to { opacity: 1; transform: translate(-50%, -50%) rotate(var(--r)) translateY(var(--y)) scale(var(--s, 1)); }
+      }
+      .hero-copy h1 {
+        margin: 0 0 0.7rem;
+        font-size: clamp(2.1rem, 5vw, 3.15rem);
+        line-height: 1.05;
+        letter-spacing: -.035em;
+        font-weight: 800;
+        color: var(--text);
+      }
+      .hero-copy .lede {
+        margin: 0 0 1.15rem;
+        color: var(--muted);
+        font-size: clamp(1rem, 1.8vw, 1.12rem);
+        max-width: 28em;
+        line-height: 1.5;
+      }
+      .hero-points {
+        margin: 0 0 1.35rem;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 0.45rem;
+      }
+      .hero-points li {
+        margin: 0;
+        padding: 0 0 0 0.85rem;
+        position: relative;
+        color: var(--muted);
+        font-size: 0.92rem;
+        line-height: 1.4;
+      }
+      .hero-points li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.55em;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--gold);
+        box-shadow: 0 0 0 3px var(--gold-soft);
+      }
+      .hero-points strong {
+        color: var(--text);
+        font-weight: 700;
+        margin-right: 0.35rem;
+      }
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+        margin-bottom: 0.7rem;
+      }
+      .hero-actions .btn { min-height: 2.6rem; padding-inline: 1.25rem; }
+      .hero-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; opacity: 0.85; }
+
+      .scroll-more {
+        position: absolute;
+        left: 50%;
+        bottom: max(12px, env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        z-index: 3;
+        opacity: 0.75;
+      }
+      .scroll-more:hover { color: var(--gold); opacity: 1; }
+      .scroll-more .chev {
+        width: 12px; height: 12px;
+        border-right: 2px solid currentColor;
+        border-bottom: 2px solid currentColor;
+        transform: rotate(45deg);
+        animation: bob 1.6s ease-in-out infinite;
+      }
+      @keyframes bob {
+        0%, 100% { transform: rotate(45deg) translate(0, 0); opacity: 0.45; }
+        50% { transform: rotate(45deg) translate(2px, 2px); opacity: 1; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .scroll-more .chev { animation: none; }
+        .fan figure { animation: none; }
+      }
+
+      @media (max-width: 860px) {
+        .hero-inner {
+          grid-template-columns: 1fr;
+          gap: 1.5rem;
+          min-height: 0;
+        }
+        .hero-copy { max-width: none; }
+        .fan {
+          --w: clamp(120px, 28cqi, 180px);
+          --spread: clamp(36px, 12cqi, 64px);
+          height: clamp(220px, 48vw, 300px);
+          order: -1;
+          max-width: 520px;
+          justify-self: center;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .hero {
+          min-height: auto;
+          padding-bottom: 3.25rem;
+        }
+        .hero-actions { flex-direction: column; align-items: stretch; }
+        .hero-actions .btn { width: 100%; }
+      }
+
+      @media (max-height: 700px) and (min-width: 861px) {
+        .hero { min-height: auto; padding-bottom: 2.5rem; }
+        .scroll-more { display: none; }
+        .fan { height: clamp(220px, 32vw, 300px); }
+      }
+
+      .wrap { width: var(--rail); margin-inline: auto; }
+      section { padding: 80px 0; }
+      .snap {
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+      }
+      .muted { color: var(--muted); }
+      h2 {
+        margin: 0 0 10px; font-size: clamp(1.5rem, 2.5vw, 2rem);
+        letter-spacing: -.02em;
+      }
+      .lead { margin: 0 0 28px; color: var(--muted); max-width: 38em; font-size: 1.05rem; }
+
+      /* One viewport = one step */
+      .step {
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        align-items: center;
+        padding:
+          calc(var(--nav-h) + 1.5rem)
+          var(--page-pad-x)
+          2.5rem;
+        border-bottom: 1px solid var(--line);
+        background: var(--bg);
+      }
+      .step:nth-child(even) { background: var(--elev); }
+      .step-inner {
+        width: var(--rail);
+        margin-inline: auto;
+        display: grid;
+        gap: clamp(1.25rem, 3vw, 2.5rem);
+        align-items: center;
+      }
+      @media (min-width: 860px) {
+        .step-inner { grid-template-columns: 1fr 1.05fr; }
+        .step:nth-child(even) .step-text { order: 2; }
+      }
+      .step-kicker {
+        margin: 0 0 0.55rem;
+        color: var(--gold);
+        font-size: 0.8rem;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .step-text h2 {
+        margin: 0 0 0.65rem;
+        font-size: clamp(1.7rem, 3.4vw, 2.4rem);
+        letter-spacing: -.03em;
+        line-height: 1.1;
+      }
+      .step-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: clamp(1rem, 1.6vw, 1.12rem);
+        max-width: 32em;
+        line-height: 1.55;
+      }
+      .step-pic {
+        border-radius: 16px;
+        padding: 12px;
+        background: hsla(240, 6%, 8%, 0.7);
+        border: 1px solid var(--line);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      }
+      .step-pic img {
+        width: 100%;
+        max-width: 520px;
+        margin-inline: auto;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+      }
+      #features {
+        background: var(--elev);
+        border-block: 1px solid var(--line);
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        align-content: center;
+        padding: clamp(2rem, 5vh, 3.5rem) var(--page-pad-x);
+      }
+      #features .lead { margin-bottom: 1.5rem; }
+      .pillars {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 700px) { .pillars { grid-template-columns: 1fr 1fr; } }
+      @media (min-width: 980px) { .pillars { grid-template-columns: repeat(3, 1fr); } }
+      .pillar {
+        padding: 1.15rem 1.2rem 1.25rem;
+        border-radius: 14px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-top: 2px solid var(--gold);
+      }
+      .pillar:nth-child(3n+2) { border-top-color: var(--cool); }
+      .pillar:nth-child(3n) { border-top-color: var(--gold-deep); }
+      .pillar h3 { margin: 0 0 0.4rem; font-size: 1.05rem; }
+      .pillar > p {
+        margin: 0 0 0.75rem;
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+      .pillar ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 0.4rem;
+      }
+      .pillar li {
+        position: relative;
+        padding-left: 0.85rem;
+        color: var(--muted);
+        font-size: 0.84rem;
+        line-height: 1.4;
+      }
+      .pillar li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.5em;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--gold);
+      }
+      .pillar:nth-child(3n+2) li::before { background: var(--cool); }
+      .features-note {
+        margin: 1.35rem 0 0;
+        padding: 0.85rem 1rem;
+        border-radius: 10px;
+        border: 1px solid hsla(var(--hue-warm), 40%, 50%, 0.22);
+        background: var(--gold-soft);
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.45;
+      }
+      .features-note strong { color: var(--text); }
+
+      .finale {
+        min-height: 100vh;
+        min-height: 100dvh;
+        height: 100vh;
+        height: 100dvh;
+        box-sizing: border-box;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: clamp(0.85rem, 2.2vh, 1.35rem);
+        padding:
+          calc(var(--nav-h) + clamp(0.85rem, 2.2vh, 1.4rem))
+          var(--page-pad-x)
+          0;
+        background:
+          radial-gradient(55% 70% at 50% 0%, var(--gold-soft), transparent 55%),
+          var(--elev);
+        border-top: 1px solid var(--line);
+      }
+      .finale-head,
+      .finale-gallery,
+      .finale > footer {
+        width: var(--rail);
+        margin-inline: auto;
+      }
+      .finale-head {
+        display: grid;
+        gap: 1rem 2rem;
+        align-items: end;
+      }
+      @media (min-width: 860px) {
+        .finale-head {
+          grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.9fr);
+        }
+      }
+      .finale-kicker {
+        margin: 0 0 0.4rem;
+        color: var(--gold);
+        font-size: 0.78rem;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .finale h2 {
+        margin: 0 0 0.45rem;
+        font-size: clamp(1.7rem, 3.2vw, 2.45rem);
+        letter-spacing: -.03em;
+        line-height: 1.08;
+        text-align: left;
+      }
+      .finale-intro p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 1rem;
+        max-width: 34em;
+        line-height: 1.5;
+        text-align: left;
+      }
+      .finale-cta {
+        display: grid;
+        gap: 0.7rem;
+        justify-items: stretch;
+      }
+      @media (min-width: 860px) {
+        .finale-cta { justify-items: end; text-align: right; }
+      }
+      .finale-cta .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin: 0;
+      }
+      @media (min-width: 860px) {
+        .finale-cta .actions { justify-content: flex-end; }
+      }
+      .finale-meta {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+      @media (min-width: 860px) {
+        .finale-meta { justify-content: flex-end; }
+      }
+      .finale-meta li {
+        padding: 0.28rem 0.65rem;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: hsla(240, 8%, 4%, 0.35);
+        color: var(--muted);
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+      .finale-gallery {
+        min-height: 0;
+        display: grid;
+        align-content: center;
+      }
+      .finale-shots {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: clamp(0.5rem, 1.4vw, 1rem);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .finale-shots li { margin: 0; }
+      .finale-shots figure {
+        margin: 0;
+        display: grid;
+        gap: 0.4rem;
+        text-align: left;
+      }
+      .finale-shots figure > img {
+        width: 100%;
+        height: auto;
+        display: block;
+        border-radius: clamp(8px, 1vw, 12px);
+        border: 1px solid var(--line);
+        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+      }
+      .finale-shots figcaption {
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        padding-inline: 0.1rem;
+      }
+      .finale-note {
+        margin: 0.75rem 0 0;
+        color: var(--muted);
+        font-size: 0.8rem;
+        line-height: 1.45;
+        text-align: left;
+      }
+      .finale-note strong { color: var(--text); }
+      @media (max-width: 720px) {
+        .finale {
+          height: auto;
+          min-height: 100dvh;
+        }
+        .finale-shots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .finale-cta .actions { flex-direction: column; }
+        .finale-cta .actions .btn { width: 100%; }
+      }
+
+      footer {
+        padding: 0.75rem 0 1rem;
+        color: var(--muted);
+        font-size: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 20px;
+        justify-content: space-between;
+        align-items: center;
+        border-top: 1px solid var(--line);
+      }
+      footer nav { display: flex; gap: 14px; }
+      footer a { color: var(--muted); text-decoration: none; font-weight: 600; }
+      footer a:hover { color: var(--gold); }
+      @media (max-width: 900px) {
+        .nav-pages a .label { display: none; }
+        .nav-pages a .n { display: inline; }
+        .nav-pages a { padding: 0.35rem 0.5rem; min-width: 1.85rem; text-align: center; }
+      }
+      @media (max-width: 700px) {
+        .nav { padding-top: 0.55rem; }
+        .nav-inner { height: 44px; }
+        .brand span { display: none; }
+        .nav-right > .btn { padding-inline: 0.7rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="nav" id="site-nav">
+      <div class="nav-inner">
+        <a class="brand" href="#top">
+          <img src="assets/app_icon_128.png" alt="" />
+          <span>GoldbergDrop</span>
+        </a>
+        <div class="nav-right">
+          <nav class="nav-pages" aria-label="Pages">
+            <a href="#top" data-page="top"><span class="label">Start</span><span class="n">1</span></a>
+            <a href="#step-1" data-page="step-1"><span class="label">1 · Drop</span><span class="n">2</span></a>
+            <a href="#step-2" data-page="step-2"><span class="label">2 · Select</span><span class="n">3</span></a>
+            <a href="#step-3" data-page="step-3"><span class="label">3 · Setup</span><span class="n">4</span></a>
+            <a href="#features" data-page="features"><span class="label">Features</span><span class="n">5</span></a>
+            <a href="#download" data-page="download"><span class="label">Ready</span><span class="n">6</span></a>
+          </nav>
+          <a class="btn" href="https://github.com/YepAiCodedThis/GoldBergDrop/releases/latest">Download</a>
+        </div>
+      </div>
+    </header>
+
+    <section class="hero snap" id="top">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="hero-brand">
+            <img src="assets/app_icon_128.png" alt="" />
+            GoldbergDrop
+          </p>
+          <h1>One drop.<br />Game ready.</h1>
+          <p class="lede">
+            Drop a game exe, confirm the Steam title, set up offline play —
+            no config files by hand.
+          </p>
+          <ul class="hero-points">
+            <li><strong>Goldberg setup</strong> App ID, settings, DLL swap</li>
+            <li><strong>Workshop</strong> Queue links, download mods</li>
+            <li><strong>Tray icon</strong> Launch games you patched here</li>
+            <li><strong>GreenLuma</strong> Optional · needs 7-Zip</li>
+          </ul>
+          <div class="hero-actions">
+            <a class="btn" href="https://github.com/YepAiCodedThis/GoldBergDrop/releases/latest">Download for Windows</a>
+            <a class="btn btn-ghost" href="https://github.com/YepAiCodedThis/GoldBergDrop">GitHub</a>
+          </div>
+          <p class="hero-note">Free · one exe · no installer · SmartScreen: More info → Run anyway</p>
+        </div>
+        <div class="fan" aria-hidden="true">
+          <figure><img src="assets/screenshot-main.png" alt="" /></figure>
+          <figure><img src="assets/screenshot-select.png" alt="" /></figure>
+          <figure><img src="assets/screenshot-workshop.png" alt="" /></figure>
+          <figure><img src="assets/screenshot-settings.png" alt="" /></figure>
+        </div>
+      </div>
+      <a class="scroll-more" href="#step-1">
+        <span>Scroll for more</span>
+        <span class="chev" aria-hidden="true"></span>
+      </a>
+    </section>
+
+    <section class="step snap" id="step-1">
+      <div class="step-inner">
+        <div class="step-text">
+          <p class="step-kicker">From drop to play · 1 / 3</p>
+          <h2>Drop the exe</h2>
+          <p>
+            Put the game’s exe on the window or pick it in a dialog.
+            Or enable Send to and ship files straight from Explorer.
+          </p>
+        </div>
+        <div class="step-pic"><img src="assets/screenshot-main.png" alt="Drop zone" /></div>
+      </div>
+    </section>
+
+    <section class="step snap" id="step-2">
+      <div class="step-inner">
+        <div class="step-text">
+          <p class="step-kicker">From drop to play · 2 / 3</p>
+          <h2>Pick the right game</h2>
+          <p>
+            GoldbergDrop suggests Steam matches. Name looks good? Apply.
+            Otherwise type the App ID — done.
+          </p>
+        </div>
+        <div class="step-pic"><img src="assets/screenshot-select.png" alt="Match list" /></div>
+      </div>
+    </section>
+
+    <section class="step snap" id="step-3">
+      <div class="step-inner">
+        <div class="step-text">
+          <p class="step-kicker">From drop to play · 3 / 3</p>
+          <h2>Set up &amp; launch</h2>
+          <p>
+            One click writes the files into the game folder.
+            Then run it as usual — or from the tray, without Steam in the background.
+          </p>
+        </div>
+        <div class="step-pic"><img src="assets/screenshot-settings.png" alt="Settings / tray" /></div>
+      </div>
+    </section>
+
+    <section class="snap" id="features">
+      <div class="wrap">
+        <h2>When you want more</h2>
+        <p class="lead">
+          Optional extras around the same tool — core flow is still drop → match → set up.
+        </p>
+        <div class="pillars">
+          <article class="pillar">
+            <h3>Workshop</h3>
+            <p>Queue Steam Workshop items and land them in the right folder.</p>
+            <ul>
+              <li>Paste links or IDs into a download queue</li>
+              <li>GGNetwork first, SteamCMD as fallback</li>
+              <li>Output folder under Settings</li>
+            </ul>
+          </article>
+          <article class="pillar">
+            <h3>GreenLuma</h3>
+            <p>Optional Steam helper — install and control from one place.</p>
+            <ul>
+              <li>Bundled install + CSF / pack import</li>
+              <li>AppList sync and DLLInjector</li>
+              <li>Start Steam with or without GreenLuma</li>
+              <li>Download prompts wait until you leave the game</li>
+            </ul>
+          </article>
+          <article class="pillar">
+            <h3>Tray launcher</h3>
+            <p>Keep games one right-click away after setup.</p>
+            <ul>
+              <li>Launch tracked titles from the tray menu</li>
+              <li>Close the window to the notification area</li>
+              <li>Autostart with Windows if you want</li>
+            </ul>
+          </article>
+          <article class="pillar">
+            <h3>Explorer Send to</h3>
+            <p>Ship an exe to GoldbergDrop without opening the window first.</p>
+            <ul>
+              <li>Enable once in Settings</li>
+              <li>Right-click → Send to → GoldbergDrop</li>
+              <li>Same drop → match → set up flow</li>
+            </ul>
+          </article>
+          <article class="pillar">
+            <h3>Single instance</h3>
+            <p>No pile of windows when you open another file.</p>
+            <ul>
+              <li>Second launch focuses the running app</li>
+              <li>Extra drops hand off via IPC</li>
+              <li>Tray stays the one home base</li>
+            </ul>
+          </article>
+          <article class="pillar">
+            <h3>Needs &amp; limits</h3>
+            <p>Small checklist so nothing surprises you later.</p>
+            <ul>
+              <li>Windows · one portable exe · no login</li>
+              <li>7-Zip only for GreenLuma / archives</li>
+              <li>For games you own — no games in the download</li>
+            </ul>
+          </article>
+        </div>
+        <p class="features-note">
+          <strong>Tip:</strong> GreenLuma is great for play, rough for updates.
+          Prefer plain Steam for downloads — GoldbergDrop can remind you after you exit a game.
+        </p>
+      </div>
+    </section>
+
+    <section class="finale snap" id="download">
+      <div class="finale-head">
+        <div class="finale-intro">
+          <p class="finale-kicker">Download</p>
+          <h2>Ready to set up?</h2>
+          <p>Free Windows exe from GitHub. One file, no installer, no account.</p>
+        </div>
+        <div class="finale-cta">
+          <div class="actions">
+            <a class="btn" href="https://github.com/YepAiCodedThis/GoldBergDrop/releases/latest">Download for Windows</a>
+            <a class="btn btn-ghost" href="https://github.com/YepAiCodedThis/GoldBergDrop">GitHub</a>
+          </div>
+          <ul class="finale-meta">
+            <li>Portable exe</li>
+            <li>No login</li>
+            <li>7-Zip only if needed</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="finale-gallery">
+        <ul class="finale-shots">
+          <li>
+            <figure>
+              <img src="assets/screenshot-main.png" alt="Drop zone" />
+              <figcaption>Drop</figcaption>
+            </figure>
+          </li>
+          <li>
+            <figure>
+              <img src="assets/screenshot-select.png" alt="Game match list" />
+              <figcaption>Match</figcaption>
+            </figure>
+          </li>
+          <li>
+            <figure>
+              <img src="assets/screenshot-workshop.png" alt="Workshop queue" />
+              <figcaption>Workshop</figcaption>
+            </figure>
+          </li>
+          <li>
+            <figure>
+              <img src="assets/screenshot-settings.png" alt="Settings" />
+              <figcaption>Settings</figcaption>
+            </figure>
+          </li>
+        </ul>
+        <p class="finale-note">
+          SmartScreen may warn → <strong>More info → Run anyway</strong>.
+          7-Zip only for GreenLuma / archive import.
+        </p>
+      </div>
+
+      <footer>
+        <p>For games you own. No games in the download — just the tool.</p>
+        <nav>
+          <a href="https://github.com/YepAiCodedThis/GoldBergDrop/releases/latest">Releases</a>
+          <a href="https://github.com/YepAiCodedThis/GoldBergDrop">Source</a>
+          <a href="https://github.com/YepAiCodedThis/GoldBergDrop#readme">README</a>
+        </nav>
+      </footer>
+    </section>
+
+    <script>
+      (() => {
+        const nav = document.getElementById("site-nav");
+        const hero = document.getElementById("top");
+        if (nav && hero && "IntersectionObserver" in window) {
+          const solid = new IntersectionObserver(
+            ([e]) => nav.classList.toggle("is-solid", !e.isIntersecting),
+            { rootMargin: "-72px 0px 0px 0px", threshold: 0 }
+          );
+          solid.observe(hero);
+        }
+
+        const pages = [...document.querySelectorAll(".nav-pages a[data-page]")];
+        if (!pages.length || !("IntersectionObserver" in window)) return;
+        const setCurrent = (id) => {
+          pages.forEach((a) => {
+            if (a.dataset.page === id) a.setAttribute("aria-current", "true");
+            else a.removeAttribute("aria-current");
+          });
+        };
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const e of entries) {
+              if (!e.isIntersecting) continue;
+              setCurrent(e.target.id);
+            }
+          },
+          { threshold: 0.55 }
+        );
+        pages.forEach((a) => {
+          const el = document.getElementById(a.dataset.page);
+          if (el) io.observe(el);
+        });
+        setCurrent("top");
+      })();
+    </script>
+  </body>
+</html>
