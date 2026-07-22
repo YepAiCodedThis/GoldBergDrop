@@ -4,8 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// Names of the Steam API DLL that Goldberg can replace, along with their
-/// "original backup" and "GUI backup" filenames.
+/// Names of the Steam API DLLs that Goldberg can replace.
 const DLL_NAMES: [&str; 2] = ["steam_api", "steam_api64"];
 
 /// How deep to recurse when the DLL isn't found directly next to the
@@ -59,8 +58,9 @@ pub fn apply_setup(
 }
 
 fn write_config(dir: &Path, options: &SetupOptions) -> Result<()> {
-    fs::write(dir.join("steam_appid.txt"), options.app_id.to_string())
-        .context("Failed to write steam_appid.txt")?;
+    let appid = dir.join("steam_appid.txt");
+    ensure_bak(&appid)?;
+    fs::write(&appid, options.app_id.to_string()).context("Failed to write steam_appid.txt")?;
 
     let steam_settings_dir = dir.join("steam_settings");
     fs::create_dir_all(&steam_settings_dir).context("Failed to create steam_settings folder")?;
@@ -109,6 +109,7 @@ fn write_dlc_file(steam_settings_dir: &Path, dlc_list: &[DlcApp]) -> Result<()> 
         return Ok(());
     }
 
+    ensure_bak(&dlc_txt)?;
     let content = dlc_list
         .iter()
         .map(|dlc| format!("{}={}", dlc.app_id, dlc.name))
@@ -128,58 +129,49 @@ fn write_achievements_file(
         return Ok(());
     }
 
+    ensure_bak(&path)?;
     let json = serde_json::to_string_pretty(achievements)
         .context("Failed to serialize achievements.json")?;
     fs::write(&path, json).context("Failed to write steam_settings/achievements.json")?;
     Ok(())
 }
 
-/// Backs up the original `{name}.dll` (once) and copies the Goldberg build
-/// of the same DLL into the game folder, mirroring GoldbergGUI's behavior:
-/// - First run: rename the original to `{name}_o.dll`.
-/// - Subsequent runs: back up the current (Goldberg) DLL to a hidden
-///   `.{name}.dll.GOLDBERGDROPBACKUP` file instead of overwriting the
-///   original backup.
+/// Ensures `path.bak` exists before we overwrite `path`.
+/// First backup wins (keeps the original); later re-patches leave `.bak` alone.
+fn ensure_bak(path: &Path) -> Result<()> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let bak = {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".bak");
+        PathBuf::from(s)
+    };
+    if bak.exists() {
+        return Ok(());
+    }
+    fs::copy(path, &bak)
+        .with_context(|| format!("Failed to create backup {}", bak.display()))?;
+    Ok(())
+}
+
+/// Backs up `{name}.dll` to `{name}.dll.bak` (once) and copies the Goldberg
+/// build of the same DLL into the game folder.
 fn swap_dll(game_dir: &Path, goldberg_cache_dir: &Path, name: &str) -> Result<()> {
     let target_dll = game_dir.join(format!("{name}.dll"));
-    let original_backup = game_dir.join(format!("{name}_o.dll"));
-    let gui_backup = game_dir.join(format!(".{name}.dll.GOLDBERGDROPBACKUP"));
     let goldberg_dll = goldberg_cache_dir.join(format!("{name}.dll"));
 
     if !goldberg_dll.exists() {
         anyhow::bail!("Goldberg build is missing {name}.dll in its cache folder");
     }
 
-    if !original_backup.exists() {
-        fs::rename(&target_dll, &original_backup)
-            .with_context(|| format!("Failed to back up original {name}.dll"))?;
-    } else {
-        fs::rename(&target_dll, &gui_backup)
-            .with_context(|| format!("Failed to back up current {name}.dll"))?;
-        set_hidden(&gui_backup);
-    }
+    ensure_bak(&target_dll)?;
 
     fs::copy(&goldberg_dll, &target_dll)
         .with_context(|| format!("Failed to copy Goldberg {name}.dll into game folder"))?;
 
     Ok(())
 }
-
-/// Marks a file as hidden on Windows via the `attrib` command. Best-effort:
-/// failures are ignored since this is a cosmetic detail of the backup file.
-#[cfg(windows)]
-fn set_hidden(path: &Path) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ = std::process::Command::new("attrib")
-        .arg("+h")
-        .arg(path)
-        .creation_flags(CREATE_NO_WINDOW)
-        .status();
-}
-
-#[cfg(not(windows))]
-fn set_hidden(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -260,9 +252,9 @@ mod tests {
             fs::read_to_string(nested.join("steam_appid.txt")).unwrap(),
             "4169770"
         );
-        // The original DLL was backed up and replaced with the Goldberg build.
+        // The original DLL was backed up as .bak and replaced with the Goldberg build.
         assert_eq!(
-            fs::read_to_string(nested.join("steam_api64_o.dll")).unwrap(),
+            fs::read_to_string(nested.join("steam_api64.dll.bak")).unwrap(),
             "original"
         );
         assert_eq!(
@@ -275,21 +267,31 @@ mod tests {
     }
 
     #[test]
-    fn apply_setup_is_config_only_when_no_dll_found() {
-        let game_dir = temp_dir("apply_none");
-        let cache_dir = temp_dir("apply_none_cache");
+    fn re_apply_keeps_original_bak() {
+        let game_dir = temp_dir("re_apply");
+        fs::write(game_dir.join("steam_api64.dll"), b"original").unwrap();
+
+        let cache_dir = temp_dir("re_apply_cache");
+        fs::write(cache_dir.join("steam_api64.dll"), b"goldberg-v1").unwrap();
 
         let options = SetupOptions {
-            app_id: 4169770,
+            app_id: 1,
             dlc_list: vec![],
             achievements: vec![],
         };
+        apply_setup(&game_dir, &cache_dir, &options).unwrap();
 
-        let swapped = apply_setup(&game_dir, &cache_dir, &options).unwrap();
+        fs::write(cache_dir.join("steam_api64.dll"), b"goldberg-v2").unwrap();
+        apply_setup(&game_dir, &cache_dir, &options).unwrap();
 
-        assert!(!swapped);
-        assert!(game_dir.join("steam_appid.txt").exists());
-        assert!(game_dir.join("steam_settings").is_dir());
+        assert_eq!(
+            fs::read_to_string(game_dir.join("steam_api64.dll.bak")).unwrap(),
+            "original"
+        );
+        assert_eq!(
+            fs::read_to_string(game_dir.join("steam_api64.dll")).unwrap(),
+            "goldberg-v2"
+        );
 
         fs::remove_dir_all(&game_dir).unwrap();
         fs::remove_dir_all(&cache_dir).unwrap();
